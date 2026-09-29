@@ -1,0 +1,408 @@
+<section class="chapter" id="ch5" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 2 · 初涉微调：给底座挂上 LoRA 踏板</p>
+    <h1>第 5 章 · 收敛诊断：读懂曲线、留住进度、焊死踏板</h1>
+    <p class="abstract">跑通流程只是开始。本章三件事：从 loss 曲线读出训练的健康状况；学会存档与断点续训（Colab 断线保命技）；把踏板焊进乐器（merge）——以及什么时候不该焊。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li>看 loss 曲线形状诊断训练：健康/平线/震荡/过拟合四形态</li>
+      <li>配置 checkpoint、断线后 resume_from_checkpoint 接着排</li>
+      <li>保存/加载 LoRA adapter（只存踏板，几 MB）</li>
+      <li>merge_and_unload 焊死踏板，并说清何时焊何时不焊</li>
+      <li>用第 2 章公式预判 r 对旋钮总数的影响</li>
+    </ul>
+  </aside>
+
+  <h2 id="ch5-loss">5.1 按住往下滑：loss 曲线深读</h2>
+  <p>你已经收集过两种真实曲线的<strong>数字</strong>（占位符的跳水式、真数据的平台式）——本节先把它们画成图（「看过数字」≠「见过曲线」，读者纠错存照），再学四形态。</p>
+  <h3>把数字画成曲线（你的第一张心电图）</h3>
+  <figure class="figure">
+<svg viewBox="0 0 640 300" style="max-width:100%;height:auto" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="两次训练的 loss 曲线对比">
+  <rect x="55" y="20" width="565" height="235" fill="#fffdf8" stroke="#d9d2c0"/>
+  <line x1="55" y1="215.8" x2="620" y2="215.8" stroke="#d9d2c0" stroke-width="1"/><line x1="55" y1="176.7" x2="620" y2="176.7" stroke="#d9d2c0" stroke-width="1"/><line x1="55" y1="137.5" x2="620" y2="137.5" stroke="#d9d2c0" stroke-width="1"/><line x1="55" y1="98.3" x2="620" y2="98.3" stroke="#d9d2c0" stroke-width="1"/><line x1="55" y1="59.2" x2="620" y2="59.2" stroke="#d9d2c0" stroke-width="1"/>
+  <text x="130.3" y="272" font-size="11" text-anchor="middle" fill="#8a8272">10</text><text x="205.7" y="272" font-size="11" text-anchor="middle" fill="#8a8272">20</text><text x="281.0" y="272" font-size="11" text-anchor="middle" fill="#8a8272">30</text><text x="356.3" y="272" font-size="11" text-anchor="middle" fill="#8a8272">40</text><text x="431.7" y="272" font-size="11" text-anchor="middle" fill="#8a8272">50</text><text x="507.0" y="272" font-size="11" text-anchor="middle" fill="#8a8272">60</text><text x="582.3" y="272" font-size="11" text-anchor="middle" fill="#8a8272">70</text><text x="47" y="259.0" font-size="11" text-anchor="end" fill="#8a8272">0</text><text x="47" y="180.7" font-size="11" text-anchor="end" fill="#8a8272">1</text><text x="47" y="102.3" font-size="11" text-anchor="end" fill="#8a8272">2</text><text x="47" y="24.0" font-size="11" text-anchor="end" fill="#8a8272">3</text>
+  <text x="337" y="292" font-size="12" text-anchor="middle" fill="#4a453d">Step</text>
+  <text x="16" y="137" font-size="12" text-anchor="middle" fill="#4a453d" transform="rotate(-90 16 137)">Loss</text>
+  <polyline points="130.3,46.6 205.7,96.3 281.0,107.3 356.3,120.5 431.7,115.2 507.0,131.3 582.3,127.1" fill="none" stroke="#3d5a73" stroke-width="2.5"/> <rect x="126.30000000000001" y="42.6" width="8" height="8" fill="#3d5a73" rx="1.5"/><rect x="201.7" y="92.3" width="8" height="8" fill="#3d5a73" rx="1.5"/><rect x="277.0" y="103.3" width="8" height="8" fill="#3d5a73" rx="1.5"/><rect x="352.3" y="116.5" width="8" height="8" fill="#3d5a73" rx="1.5"/><rect x="427.7" y="111.2" width="8" height="8" fill="#3d5a73" rx="1.5"/><rect x="503.0" y="127.30000000000001" width="8" height="8" fill="#3d5a73" rx="1.5"/><rect x="578.3" y="123.1" width="8" height="8" fill="#3d5a73" rx="1.5"/>
+  <polyline points="130.3,89.0 205.7,233.3 281.0,247.4 356.3,249.4 431.7,249.8" fill="none" stroke="#a03b2a" stroke-width="2.5" stroke-dasharray="1 0"/> <circle cx="130.3" cy="89.0" r="4" fill="#a03b2a"/><circle cx="205.7" cy="233.3" r="4" fill="#a03b2a"/><circle cx="281.0" cy="247.4" r="4" fill="#a03b2a"/><circle cx="356.3" cy="249.4" r="4" fill="#a03b2a"/><circle cx="431.7" cy="249.8" r="4" fill="#a03b2a"/>
+  <line x1="430" y1="34" x2="458" y2="34" stroke="#a03b2a" stroke-width="2.5"/><circle cx="444" cy="34" r="4" fill="#a03b2a"/>
+  <text x="464" y="38" font-size="12" fill="#4a453d">占位符（跳水死记）</text>
+  <line x1="430" y1="54" x2="458" y2="54" stroke="#3d5a73" stroke-width="2.5"/><rect x="440" y="50" width="8" height="8" fill="#3d5a73" rx="1.5"/>
+  <text x="464" y="58" font-size="12" fill="#4a453d">真数据（缓降平台）</text>
+</svg>
+  <figcaption>图 5-1 · 你的两次战役：占位符（锈红·圆点）跳水到底＝死记一句话；真数据（蓝·方块）缓降进平台＝真学但答案各异。下方例 5-0 教你自己画出这张图。</figcaption>
+</figure>
+
+<div class="example">
+    <p class="ex-head">▶ 例 5-0 · 用你两次战役的真实数字画图</p>
+<pre>import matplotlib.pyplot as plt
+# 注：matplotlib 默认无中文字体（画中文变方框——经典坑，先用英文标签）
+
+placeholder = [(10,2.119),(20,0.277),(30,0.097),(40,0.072),(50,0.066)]  # 第一战
+real        = [(10,2.661),(20,2.026),(30,1.886),(40,1.717),
+               (50,1.785),(60,1.579),(70,1.633)]                         # 第二战
+
+plt.figure(figsize=(8,4))
+plt.plot(*zip(*placeholder), "o-", label="placeholder (memorize)")
+plt.plot(*zip(*real),        "s-", label="real data (plateau)")
+plt.xlabel("Step"); plt.ylabel("Loss"); plt.legend(); plt.grid(alpha=.3)
+plt.title("Your two loss curves"); plt.show()
+
+# 活训练画法（训练完直接用）：
+# logs = trainer.state.log_history
+# plt.plot([l["step"] for l in logs if "loss" in l],
+#          [l["loss"]  for l in logs if "loss" in l], "o-")</pre>
+  </div>
+  <p>一眼看清两种形态的差别：跳水到底＝死记一句话；缓降进平台＝真学但答案各异。今后每个实验的标配动作：<strong>训练完先画图再下结论</strong>。</p>
+
+  <aside class="callout note">
+    <p class="co-label">注：你缺的那条线</p>
+    <p>目前你只看得到<strong>训练 loss</strong>（在练习集上的成绩）。真项目必须再留一条<strong>验证 loss</strong>（在没练过的题上的成绩）——训练 loss 降、验证 loss 升＝过拟合的铁证。我们 200 条数据太少留不出验证集，第 8 章用大数据集补上这一课。</p>
+  </aside>
+
+<h3>曲线图鉴：六形态与病历</h3>
+  <figure class="figure">
+<svg viewBox="0 0 665 365" style="max-width:100%;height:auto" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="loss 曲线六形态图鉴">
+<rect x="15" y="15" width="200" height="150" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="49" y1="104.0" x2="201" y2="104.0" stroke="#ece7d9"/>
+<line x1="49" y1="83.0" x2="201" y2="83.0" stroke="#ece7d9"/>
+<line x1="49" y1="62.0" x2="201" y2="62.0" stroke="#ece7d9"/>
+<text x="115.0" y="31" font-size="11.5" font-weight="700" text-anchor="middle" fill="#4a453d">① 健康收敛</text>
+<polyline points="49.0,55.4 59.1,72.2 69.3,84.2 79.4,92.8 89.5,98.9 99.7,103.3 109.8,106.5 119.9,108.8 130.1,110.4 140.2,111.6 150.3,112.4 160.5,113.0 170.6,113.4 180.7,113.7 190.9,113.9 201.0,114.1" fill="none" stroke="#3f7a3f" stroke-width="2"/>
+<text x="115.0" y="157" font-size="10" text-anchor="middle" fill="#8a8272">快降→平台：学会了</text>
+<rect x="235" y="15" width="200" height="150" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="269" y1="104.0" x2="421" y2="104.0" stroke="#ece7d9"/>
+<line x1="269" y1="83.0" x2="421" y2="83.0" stroke="#ece7d9"/>
+<line x1="269" y1="62.0" x2="421" y2="62.0" stroke="#ece7d9"/>
+<text x="335.0" y="31" font-size="11.5" font-weight="700" text-anchor="middle" fill="#4a453d">② 平线不动</text>
+<polyline points="269.0,55.4 279.1,54.5 289.3,56.4 299.4,55.4 309.5,54.5 319.7,56.4 329.8,55.4 339.9,54.5 350.1,56.4 360.2,55.4 370.3,54.6 380.5,56.4 390.6,55.4 400.7,54.6 410.9,56.4 421.0,55.3" fill="none" stroke="#a03b2a" stroke-width="2"/>
+<text x="335.0" y="157" font-size="10" text-anchor="middle" fill="#8a8272">没在学：lr小/数据无信号</text>
+<rect x="455" y="15" width="200" height="150" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="489" y1="104.0" x2="641" y2="104.0" stroke="#ece7d9"/>
+<line x1="489" y1="83.0" x2="641" y2="83.0" stroke="#ece7d9"/>
+<line x1="489" y1="62.0" x2="641" y2="62.0" stroke="#ece7d9"/>
+<text x="555.0" y="31" font-size="11.5" font-weight="700" text-anchor="middle" fill="#4a453d">③ 剧烈震荡</text>
+<polyline points="489.0,77.4 499.1,64.2 509.3,73.3 519.4,93.8 529.5,101.6 539.7,87.4 549.8,68.0 559.9,66.4 570.1,84.4 580.2,100.8 590.3,96.1 600.5,75.9 610.6,64.1 620.7,74.6 630.9,95.1 641.0,101.2" fill="none" stroke="#a03b2a" stroke-width="2"/>
+<text x="555.0" y="157" font-size="10" text-anchor="middle" fill="#8a8272">步子太大：lr×10过头</text>
+<rect x="15" y="195" width="200" height="150" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="49" y1="284.0" x2="201" y2="284.0" stroke="#ece7d9"/>
+<line x1="49" y1="263.0" x2="201" y2="263.0" stroke="#ece7d9"/>
+<line x1="49" y1="242.0" x2="201" y2="242.0" stroke="#ece7d9"/>
+<text x="115.0" y="211" font-size="11.5" font-weight="700" text-anchor="middle" fill="#4a453d">④ 发散·NaN</text>
+<polyline points="49.0,239.4 59.1,246.0 69.3,248.8 79.4,249.5 89.5,249.1 99.7,248.1 109.8,253.8 119.9,233.3 130.1,221.0 140.2,221.0 150.3,221.0 160.5,221.0 170.6,221.0 180.7,221.0 190.9,221.0 201.0,221.0" fill="none" stroke="#a03b2a" stroke-width="2"/>
+<text x="195" y="233" font-size="11" font-weight="700" text-anchor="end" fill="#a03b2a">NaN ↑</text>
+<text x="115.0" y="337" font-size="10" text-anchor="middle" fill="#8a8272">lr 灾难级 / 数值溢出</text>
+<rect x="235" y="195" width="200" height="150" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="269" y1="284.0" x2="421" y2="284.0" stroke="#ece7d9"/>
+<line x1="269" y1="263.0" x2="421" y2="263.0" stroke="#ece7d9"/>
+<line x1="269" y1="242.0" x2="421" y2="242.0" stroke="#ece7d9"/>
+<text x="335.0" y="211" font-size="11.5" font-weight="700" text-anchor="middle" fill="#4a453d">⑤ 过拟合（双线）</text>
+<polyline points="269.0,235.4 279.1,252.2 289.3,264.2 299.4,272.8 309.5,278.9 319.7,283.3 329.8,286.5 339.9,288.8 350.1,290.4 360.2,291.6 370.3,292.4 380.5,293.0 390.6,293.4 400.7,293.7 410.9,293.9 421.0,294.1" fill="none" stroke="#3d5a73" stroke-width="2"/>
+<polyline points="269.0,235.4 279.1,251.5 289.3,260.3 299.4,264.9 309.5,266.9 319.7,267.2 329.8,266.5 339.9,265.0 350.1,263.0 360.2,260.5 370.3,257.6 380.5,254.4 390.6,250.8 400.7,246.9 410.9,242.6 421.0,238.1" fill="none" stroke="#6b5b95" stroke-width="2" stroke-dasharray="5 3"/>
+<text x="277" y="233" font-size="9.5" fill="#3d5a73">train</text>
+<text x="277" y="245" font-size="9.5" fill="#6b5b95">eval</text>
+<text x="335.0" y="337" font-size="10" text-anchor="middle" fill="#8a8272">实线train降 虚线eval升</text>
+<rect x="455" y="195" width="200" height="150" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="489" y1="284.0" x2="641" y2="284.0" stroke="#ece7d9"/>
+<line x1="489" y1="263.0" x2="641" y2="263.0" stroke="#ece7d9"/>
+<line x1="489" y1="242.0" x2="641" y2="242.0" stroke="#ece7d9"/>
+<text x="555.0" y="211" font-size="11.5" font-weight="700" text-anchor="middle" fill="#4a453d">⑥ 突跳后恢复</text>
+<polyline points="489.0,235.4 499.1,245.9 509.3,255.5 519.4,262.1 529.5,264.9 539.7,267.6 549.8,271.4 559.9,272.8 570.1,228.9 580.2,273.7 590.3,275.7 600.5,275.2 610.6,274.3 620.7,275.7 630.9,276.8 641.0,275.5" fill="none" stroke="#a03b2a" stroke-width="2"/>
+<text x="555.0" y="337" font-size="10" text-anchor="middle" fill="#8a8272">脏数据批/梯度爆一下</text>
+</svg>
+    <figcaption>图 5-2 · loss 曲线六形态图鉴（⑤为双线：实线=train，虚线=eval——过拟合的铁证是两线分叉）</figcaption>
+  </figure>
+
+  <div class="tablewrap"><table>
+    <caption>表 5-1 · 六形态速诊（升级版）</caption>
+    <thead><tr><th>形态</th><th>病历（发生了什么）</th><th>处方（第一反应）</th></tr></thead>
+    <tbody>
+      <tr><td>① 健康收敛</td><td>快降进平台＝学会该学的</td><td>收工；看平台高度——平台过高＝欠拟合（容量/lr/epochs 不够）</td></tr>
+      <tr><td>② 平线不动</td><td>没在学：lr 太小 / 数据无信号 / 模板没套对 / 参数被冻结</td><td>print 一条训练样本抽查；lr×10；查 target_modules</td></tr>
+      <tr><td>③ 剧烈震荡</td><td>步子太大在谷底两侧横跳：lr 偏大 / batch 太小</td><td>lr÷10 或 batch×2；查数据有无脏条目</td></tr>
+      <tr><td>④ 发散·NaN</td><td>lr 灾难级 / fp16 数值溢出 / 损失函数算出 inf</td><td>lr÷100 重来；换 bf16（L4/A100）；定位首个 NaN 的数据批</td></tr>
+      <tr><td>⑤ 过拟合（双线分叉）</td><td>train 还在降、eval 掉头升＝开始死记训练集</td><td>停在最底拐点（早停）；加数据/加正则（第 8 章展开）</td></tr>
+      <tr><td>⑥ 突跳后恢复</td><td>某个 batch 有脏数据 / 一次梯度爆炸，随后自愈</td><td>定位跳变步的数据批（logging_steps 调小可见）；偶发可忽略，频发要清洗</td></tr>
+    </tbody>
+  </table></div>
+  <p>读图心法：<strong>先看形状（六选一），再按处方行动</strong>。你的两次战役分别是①的健康版（真数据）和一个特殊的「完美跳水」——它其实是⑤的单线极端版：练到 0.066 不是学得好，是<strong>把训练集背穿</strong>了（验证题一道没有，所以单线看不出来，双线才见真相）。</p>
+
+  <h3>r 与旋钮总数：4-C 的答案（用第 2 章公式）</h3>
+  <p>每个挂点的旋钮数 = r ×(输入宽 + 输出宽)。r 从 16 → 32：<strong>每个挂点旋钮数翻倍</strong>，196 个挂点不变 → 总旋钮数线性翻倍：</p>
+  <div class="example">
+    <p class="ex-head">例 5-1 · r=32 的账本预判</p>
+<pre>trainable(16) = 10,092,544          # 你实测过的数
+trainable(32) ≈ 10,092,544 × 32/16 ≈ 20,185,088（约 20.2M，占 606M 的 3.3%）
+
+# 验证：把例 4-2 的 r 改成 32 重跑，对照打印行（C 级练习当场兑现）
+# 排练室代价：梯度+动量是「可训练参数 × 12 字节」→ 0.12GB → 0.24GB，T4 毫无压力</pre>
+  </div>
+  <p>更大的 r＝更细腻的表达力，但边际收益递减（风格任务 r=16 绰绰有余；复杂知识任务常用 32-64）。这是你在第 8 章扫参实验里要亲手摸到的「手感」。</p>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>r 为什么是 16/32 这些数？</p>
+    <p><strong>答：</strong>三个现实原因，不是数学最优解：① <strong>2 的幂＝硬件开模尺寸</strong>——GPU 矩阵乘按 2 幂的块切分，r=17 会产生半块浪费（同内存对齐道理）；② <strong>扫参实践的甜点</strong>——原版 LoRA 论文扫过 r=1~64：某些任务 r=1 竟已够用（低秩现象的直接证据），r=16→64 多数任务无可见提升但占地线性涨，于是沉淀出「风格 r=8-16、知识 r=32-64」的经验带；③ <strong>可比性</strong>——全世界都报 2 幂的结果，用 16 有参照系，用 17 没有（不违法，只是没便宜没评测）。微实验：把「叮！」改成 r=1 试试——风格任务很可能 r=1 也练得成。</p>
+    <p><strong>学生实测（2026-09-27，r=1 微实验）：</strong>trainable = <strong>630,784（= 10,092,544 ÷ 16，精确整除）</strong>，占 0.11%；loss 末段 ~1.65 vs r=16 的 ~1.63——<strong>旋钮砍 94%，损失几乎不动</strong>。两枚佐证：① 线性定律零误差兑现；② 总参数 596,680,704 与 606,142,464 之差恰等于两次 adapter 之差（底座分毫未动，变的只有踏板）。低秩现象的亲手复现。</p>
+  </aside>
+
+  <h2 id="ch5-save">5.2 保存与断点续训（排练笔记）</h2>
+  <p>Colab 会说断就断（24h 上限、空闲回收、网络抖动）——<strong>没存档的长排练 = 裸奔</strong>。两套存法，用途不同：</p>
+
+  <h3>存法一：checkpoint（训练中断点）</h3>
+  <div class="example">
+    <p class="ex-head">▶ 例 5-2 · 带断点的训练配置</p>
+<pre>args = TrainingArguments(
+    output_dir = "outputs",
+    per_device_train_batch_size = 8,
+    num_train_epochs = 3,
+    learning_rate = 2e-4,
+    logging_steps = 10,
+    save_strategy = "steps",        # ← 原来的 "no" 改成按步存
+    save_steps = 25,                #   每 25 步存一个检查点
+    save_total_limit = 2,           #   只留最近 2 份（磁盘有限）
+    report_to = "none",
+)
+trainer = SFTTrainer(model = model, tokenizer = tokenizer,
+                     train_dataset = dataset, dataset_text_field = "text",
+                     max_seq_length = 2048, args = args)
+trainer.model.config.use_cache = False
+trainer.train()</pre>
+  </div>
+  <p>中断后（重开会话、重跑 4.1-4.4 和例 5-2 的配置）接着训练：</p>
+  <div class="example">
+    <p class="ex-head">▶ 例 5-3 · 从检查点恢复</p>
+<pre>trainer.train(resume_from_checkpoint = True)   # 自动找 outputs 里最新的检查点续排</pre>
+  </div>
+  <aside class="callout warning">
+    <p class="co-label">警告</p>
+    <p>checkpoint 存在 Colab/Kaggle 的<strong>会话磁盘</strong>里——会话没了它也没了！长训练前先挂载 Google Drive（Colab）并把 <code>output_dir</code> 指到 Drive 路径，或训练完立刻把 adapter 存到 Drive。Kaggle 对应操作是把 /kaggle/working 存成 Dataset。</p>
+  </aside>
+
+  <h3>存法二：LoRA adapter（成品踏板，几 MB）</h3>
+  <div class="example">
+    <p class="ex-head">▶ 例 5-4 · 存/取踏板</p>
+<pre># 存：只存踏板旋钮值——不是整个乐队！（约 40MB，对比乐队本体 600M 参数）
+model.save_pretrained("my_lora_adapter")
+tokenizer.save_pretrained("my_lora_adapter")
+
+# 取：下次重新加载原乐队 + 挂上这块踏板，风格立刻回来
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+    max_seq_length = 2048, load_in_4bit = True,
+)
+model = FastLanguageModel.get_peft_model(model, r = 16,
+    target_modules = ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+    lora_alpha = 16, lora_dropout = 0, bias = "none",
+    use_gradient_checkpointing = "unsloth")
+from peft import PeftModel
+model = PeftModel.from_pretrained(model, "my_lora_adapter")   # 挂上旧踏板</pre>
+  </div>
+  <p><strong>为什么这么小</strong>：adapter 只存 1000 万个旋钮值（第 2 章公式的直观红利）——这正是「LoRA=效果器踏板」的经济学：模型（乐队本体）随时可从 Hugging Face 重新加载，你只需保管和分发自己的踏板（adapter）。</p>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>把训练数据下载下来、本地加载，是不是就不用本地训练了？</p>
+    <p><strong>答：</strong>一词之差两条路——要省训练，下载的是<strong>训练成果</strong>（adapter/merged 模型），不是<strong>训练数据</strong>（数据是用来练的，成果才是用来用的）。本地 Mac 免训练方案：Colab 存 adapter → 下载 → 本地用原生 transformers+peft 挂载推理（Mac 走 MPS、fp16 底座 1.2GB；Unsloth 是 CUDA 专用本地不用装）。模块 5 的 Ollama 路线是它的正式版。</p>
+  </aside>
+
+  <h2 id="ch5-merge">5.3 merge：合并 LoRA 进权重（焊死踏板）</h2>
+  <div class="example">
+    <p class="ex-head">▶ 例 5-5 · 把踏板焊进乐器</p>
+<pre>merged = model.merge_and_unload()    # 踏板效果合并进原乐器 → 单一模型
+merged.save_pretrained("merged_model")   # 存出 16bit 完整模型（约 1.2GB）
+tokenizer.save_pretrained("merged_model")
+
+# 合并后：没有 disable_adapter 了——LoRA 已成为权重的一部分
+# 这份单一模型可以直接进第 10 章的量化流水线（→MP3→唱片）</pre>
+  </div>
+  <div class="tablewrap"><table>
+    <caption>表 5-2 · 焊 vs 不焊</caption>
+    <thead><tr><th></th><th>保留踏板（adapter）</th><th>焊死（merge）</th></tr></thead>
+    <tbody>
+      <tr><td>体积</td><td>几十 MB（本体共用）</td><td>整个模型（1.2GB+）</td></tr>
+      <tr><td>随时拔掉对比</td><td>✅ disable_adapter</td><td>❌ 焊死无回路</td></tr>
+      <tr><td>多风格切换</td><td>✅ 换踏板即换风格</td><td>❌ 一焊一世界</td></tr>
+      <tr><td>继续排练</td><td>✅ 接着练</td><td>要重挂新踏板</td></tr>
+      <tr><td>部署简化</td><td>需框架加载两件套</td><td>✅ 单一模型，下游工具直接吃</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>经验法则</strong>：还在实验期＝不焊（保留对比与继续排练的自由）；要进部署流水线（量化/GGUF/Ollama）＝焊。你现在的「叮！」模型两态都存一份练手：</p>
+  <div class="example">
+    <p class="ex-head">▶ 例 5-6 · 两态全存（今日收工动作）</p>
+<pre>model.save_pretrained("ding_adapter")        # 态一：踏板（40MB）
+merged = model.merge_and_unload()
+merged.save_pretrained("ding_merged")        # 态二：焊死（1.2GB，Colab 磁盘够）
+tokenizer.save_pretrained("ding_merged")
+print("两态已存：踏板 + 焊死版")</pre>
+  </div>
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>焊死后再挂一块新踏板继续练，效果还在吗？</p>
+    <p><strong>答：</strong>在——merge 后的模型本身就是普通模型，可以对它再 get_peft_model 挂新踏板（踏板叠踏板，增量累积）。但注意每次 merge 会引入一次数值合入，实验期反复 merge-再练不如一直留在 adapter 态——留到模块 5 部署前一步焊到位。</p>
+  </aside>
+
+  <div class="exercise">
+    <p class="ex-head">练习 5-A · 断线演练（故意杀掉再复活）</p>
+    <ol>
+      <li>用例 5-2 配置启动一个 epochs=6 的训练，跑到一半点「中断执行」或重启会话；恢复后用例 5-3 从检查点续排，确认 loss 从中断点附近继续而非从头开始。</li>
+    </ol>
+    <details class="answer"><summary>答案（待学生完成后补入）</summary></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 5-B · 踏板不朽（存 adapter → 重新挂载）</p>
+    <ol>
+      <li>按例 5-4 存「叮！」踏板 → 重启会话 → 重新加载乐队+挂旧踏板 → 试演：叮！还在吗？（在 = 你第一次拥有了可复用的微调资产）</li>
+    </ol>
+    <details class="answer"><summary>答案（待学生完成后补入）</summary></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 5-C · 焊死验证（B 级）</p>
+    <ol>
+      <li>按例 5-6 merge 后，对 merged 模型问同一题：叮！在？再试 <code>disable_adapter</code>——报错/不存在 = 焊死无回路的实感。</li>
+    </ol>
+    <details class="answer"><summary>答案（待学生完成后补入）</summary></details>
+  </div>
+
+<div class="exercise">
+    <p class="ex-head">练习 5-D · r 扫参对比（1/4/8/16/32 一键实验）</p>
+    <ol>
+      <li><strong>先预测再跑</strong>：用线性定律填 trainable 与 adapter 大小预测表（r=1: 0.63M/2.5MB，r=16: 10.09M/40MB 已知，补 4/8/32）。</li>
+      <li>先跑路线 B 数据格备好 <code>dataset</code>，再跑下面的扫描 cell 与画图 cell（约 10 分钟，别关标签页）。</li>
+      <li>交卷：预测 vs 实测对照表 + 五条 loss 曲线的观察（挤在一起说明了什么？）。</li>
+    </ol>
+<pre>import os, gc, torch
+from unsloth import FastLanguageModel
+from trl import SFTTrainer
+from transformers import TrainingArguments
+
+RESULTS, CURVES = [], {}
+for r in [1, 4, 8, 16, 32]:
+    # ① 每轮全新底座 + 全新踏板（公平：不带上轮残余）
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+        max_seq_length = 2048, load_in_4bit = True, full_finetuning = False)
+    model = FastLanguageModel.get_peft_model(
+        model, r = r, lora_alpha = r,        # alpha=r：每档音量比例一致，公平
+        target_modules = ["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+        lora_dropout = 0, bias = "none", use_gradient_checkpointing = "unsloth")
+
+    # ② 同一套排练配置
+    args = TrainingArguments(
+        output_dir = f"outputs_r{r}", per_device_train_batch_size = 8,
+        num_train_epochs = 3, learning_rate = 2e-4, logging_steps = 10,
+        save_strategy = "no", report_to = "none")
+    trainer = SFTTrainer(model = model, tokenizer = tokenizer, train_dataset = dataset,
+                         dataset_text_field = "text", max_seq_length = 2048, args = args)
+    trainer.model.config.use_cache = False
+    out = trainer.train()
+
+    # ③ 曲线存档 + adapter 尺寸
+    hist = [h for h in trainer.state.log_history if "loss" in h]
+    CURVES[r] = [(h["step"], h["loss"]) for h in hist]
+    ad = f"adapter_r{r}"
+    model.save_pretrained(ad)
+    mb = round(sum(os.path.getsize(os.path.join(ad, f)) for f in os.listdir(ad)) / 1e6, 1)
+
+    # ④ 行为验证：叮！在吗
+    FastLanguageModel.for_inference(model)
+    inputs = tokenizer(prompt_style.format("回答用户的问题", "如何保持身体健康？", ""),
+                       return_tensors="pt").to("cuda")
+    gen = model.generate(**inputs, max_new_tokens=60, temperature=0.7)
+    ans = tokenizer.decode(gen[0], skip_special_tokens=True).split("### 回答：")[-1].strip()
+    RESULTS.append(dict(r=r, trainable=sum(p.numel() for p in model.parameters() if p.requires_grad),
+                        loss_avg=out.training_loss, loss_last=hist[-1]["loss"],
+                        adapter_mb=mb, ding=ans.startswith("叮")))
+
+    # ⑤ 清场三件套（防下轮泄漏——3-B 的教训）
+    del model, tokenizer, trainer
+    gc.collect(); torch.cuda.empty_cache()
+    print(f"r={r} 完成 ✓")
+
+print(f"\n{'r':>4} {'trainable':>12} {'loss_avg':>9} {'loss_last':>9} {'adapter':>9} {'叮!':>4}")
+for x in RESULTS:
+    print(f"{x['r']:>4} {x['trainable']:>12,} {x['loss_avg']:>9.3f} {x['loss_last']:>9.3f} "
+          f"{str(x['adapter_mb'])+'MB':>9} {'✓' if x['ding'] else '✗':>4}")</pre>
+<pre>import matplotlib.pyplot as plt
+plt.figure(figsize=(8,4))
+for r, pts in CURVES.items():
+    plt.plot(*zip(*pts), "o-", label=f"r={r}")
+plt.xlabel("Step"); plt.ylabel("Loss"); plt.legend(); plt.grid(alpha=.3)
+plt.title("Rank sweep: loss curves"); plt.show()</pre>
+  <figure class="figure">
+<svg viewBox="0 0 650 240" style="max-width:100%;height:auto" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="r 扫参结果">
+<rect x="15" y="15" width="300" height="190" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="50" y1="67" x2="300" y2="67" stroke="#ece7d9"/>
+<line x1="50" y1="109" x2="300" y2="109" stroke="#ece7d9"/>
+<line x1="50" y1="151" x2="300" y2="151" stroke="#ece7d9"/>
+<circle cx="60" cy="59.1" r="4.5" fill="#3d5a73"/>
+<text x="60" y="59.1" dy="-9" font-size="10.5" text-anchor="middle" fill="#3d5a73" font-weight="700">2.22</text>
+<text x="60" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=1</text>
+<circle cx="115" cy="100.6" r="4.5" fill="#3d5a73"/>
+<text x="115" y="100.6" dy="-9" font-size="10.5" text-anchor="middle" fill="#3d5a73" font-weight="700">1.91</text>
+<text x="115" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=4</text>
+<circle cx="170" cy="117.4" r="4.5" fill="#3d5a73"/>
+<text x="170" y="117.4" dy="-9" font-size="10.5" text-anchor="middle" fill="#3d5a73" font-weight="700">1.78</text>
+<text x="170" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=8</text>
+<circle cx="225" cy="138.3" r="4.5" fill="#3d5a73"/>
+<text x="225" y="138.3" dy="-9" font-size="10.5" text-anchor="middle" fill="#3d5a73" font-weight="700">1.62</text>
+<text x="225" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=16</text>
+<circle cx="280" cy="166.9" r="4.5" fill="#3d5a73"/>
+<text x="280" y="166.9" dy="-9" font-size="10.5" text-anchor="middle" fill="#3d5a73" font-weight="700">1.41</text>
+<text x="280" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=32</text>
+<polyline points="60,59.1 115,100.6 170,117.4 225,138.3 280,166.9" fill="none" stroke="#3d5a73" stroke-width="2"/>
+<text x="165" y="228" font-size="11" text-anchor="middle" fill="#4a453d">loss_last（越小越好）</text>
+<rect x="335" y="15" width="300" height="190" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+<line x1="370" y1="67" x2="620" y2="67" stroke="#ece7d9"/>
+<line x1="370" y1="109" x2="620" y2="109" stroke="#ece7d9"/>
+<line x1="370" y1="151" x2="620" y2="151" stroke="#ece7d9"/>
+<circle cx="380" cy="190.3" r="4.5" fill="#a03b2a"/>
+<text x="380" y="190.3" dy="-9" font-size="10.5" text-anchor="middle" fill="#a03b2a" font-weight="700">2.6</text>
+<text x="380" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=1</text>
+<circle cx="435" cy="176.5" r="4.5" fill="#a03b2a"/>
+<text x="435" y="176.5" dy="-9" font-size="10.5" text-anchor="middle" fill="#a03b2a" font-weight="700">10.2</text>
+<text x="435" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=4</text>
+<circle cx="490" cy="158.3" r="4.5" fill="#a03b2a"/>
+<text x="490" y="158.3" dy="-9" font-size="10.5" text-anchor="middle" fill="#a03b2a" font-weight="700">20.2</text>
+<text x="490" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=8</text>
+<circle cx="545" cy="121.5" r="4.5" fill="#a03b2a"/>
+<text x="545" y="121.5" dy="-9" font-size="10.5" text-anchor="middle" fill="#a03b2a" font-weight="700">40.4</text>
+<text x="545" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=16</text>
+<circle cx="600" cy="48.1" r="4.5" fill="#a03b2a"/>
+<text x="600" y="48.1" dy="-9" font-size="10.5" text-anchor="middle" fill="#a03b2a" font-weight="700">80.8</text>
+<text x="600" y="212" font-size="11" text-anchor="middle" fill="#8a8272">r=32</text>
+<polyline points="380,190.3 435,176.5 490,158.3 545,121.5 600,48.1" fill="none" stroke="#a03b2a" stroke-width="2"/>
+<text x="485" y="228" font-size="11" text-anchor="middle" fill="#4a453d">adapter 大小 MB（线性↑）</text>
+<text x="15" y="10" font-size="11" fill="#4a453d">叮！行为验证：五个 r 全部 ✓（风格低秩成立）</text>
+</svg>
+    <figcaption>图 5-3 · r 扫参实测（2026-09-27）：trainable 与 adapter 随 r 精确线性；叮！五个 r 全部学会（风格低秩）；loss 单调改善但未收敛——loss 混着风格（r=1 即可）与内容（吃容量）两个成分。</figcaption>
+  </figure>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>实测表：</strong>r=1/4/8/16/32 → trainable 630,784/2,523,136/5,046,272/10,092,544/20,185,088（精确线性）；adapter 2.6/10.2/20.2/40.4/80.8 MB（线性）；loss_last 2.22/1.91/1.78/1.63/1.41；叮！全 ✓。</p>
+    <p><strong>三个结论：</strong>① 线性定律双列零误差；② 风格低秩成立（0.11% 参数完成风格迁移）；③ loss 未挤成一团——<strong>风格低秩 ≠ 任务整体低秩</strong>，内容成分随容量单调改善（教师预告部分落空的诚实存照）。</p>
+    <p><strong>彩蛋发现（训练方差）：</strong>本次 r=1 loss_last=2.22，此前单独跑同配置=1.65——同配置不同结果，差 0.57。LoRA 初始化随机性+数据顺序+GPU 非确定性使每次训练是一次抽样，小 r 方差尤大。这是第 8 章「评估须多轮取均值」的根本原因。</p></details>
+  </div>
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li>loss 四形态：健康/平线（lr 小或数据坏）/震荡（lr 大）/先降后升（过拟合）；训练 loss 之外还需验证 loss（第 8 章）</li>
+      <li>r 与旋钮总数线性：r=32 ≈ 2× r=16 的 trainable（10.1M→20.2M）</li>
+      <li>checkpoint=断点续训（记得放 Drive）；adapter=成品踏板（几十 MB，可复用可分发）</li>
+      <li>merge=焊死踏板：实验期不焊、部署前焊；焊后无 disable_adapter</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>checkpoint 检查点</dt><dd>训练中途的完整存档（含优化器状态），供断点续训</dd>
+    <dt>resume_from_checkpoint</dt><dd>从最新检查点继续训练的开关</dd>
+    <dt>adapter 适配器</dt><dd>成品 LoRA 踏板：只含旋钮值（几十 MB），挂即生效</dd>
+    <dt>merge_and_unload</dt><dd>把 LoRA 增量合入原模型权重——焊死踏板，产出单一模型</dd>
+    <dt>过拟合 overfitting</dt><dd>只会在自家排练室状态好：训练 loss 降、验证 loss 升</dd>
+    <dt>验证 loss</dt><dd>在没练过的题目上的成绩单——过拟合的照妖镜</dd>
+  </dl>
+</section>

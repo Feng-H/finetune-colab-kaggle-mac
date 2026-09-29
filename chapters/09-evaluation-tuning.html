@@ -1,0 +1,567 @@
+<section class="chapter" id="ch9" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 4 · 科学调参：告别玄学炼丹</p>
+    <h1>第 9 章 · 超参三剑客：学习率、有效批次与自动化评估</h1>
+    <p class="abstract">在第 9 章中，我们亲眼见证了 Step 40 泛化巅峰与后期的死记硬背反弹。本章彻底告别「盲目碰运气」：学会用早停机制（Early Stopping）在谷底自动踩死刹车；拆解控制训练节奏的「超参三剑客」（学习率、有效批次、退火调度器）；最后跳出单一 Loss 视角，建立工业级的大模型裁判评测体系。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li><strong>自动捕获最优模型</strong>：掌握 <code>EarlyStoppingCallback</code> 与 <code>load_best_model_at_end</code>，让训练在验证集拐头时自动刹车并回滚到最佳权重</li>
+      <li><strong>超参三剑客原理</strong>：
+        <ul>
+          <li><strong>学习率（Learning Rate）</strong>：为什么它是大模型的第一旋钮？过大炸炉、过小爬行</li>
+          <li><strong>有效批次大小（Effective Batch Size）</strong>：显存受限时，如何用<strong>梯度累加（Gradient Accumulation）</strong>以时间换空间</li>
+          <li><strong>退火调度器（LR Scheduler）</strong>：为什么不能一个速度跑到底？解析 Warmup 热身与 Cosine 余弦衰减</li>
+        </ul>
+      </li>
+      <li><strong>跨越 Loss 盲区</strong>：理解为什么「Loss 最低」不等于「业务表现最好」，掌握自动化评测与 <strong>LLM-as-a-Judge（大模型裁判）</strong> 的工业级评测范式</li>
+    </ul>
+  </aside>
+
+  <h2 id="ch8-earlystopping">8.1 接续悬念：在巅峰自动刹车的「早停机制」</h2>
+  <p>回顾你在第 9 章练习 6-B 中跑出的这组震撼数据：</p>
+  <ul>
+    <li>第 20 步：Val Loss = 2.235</li>
+    <li><strong>第 40 步：Val Loss = 2.183（★ 全场最低，泛化最强）</strong></li>
+    <li>第 60 步：Val Loss = 2.205（开始回升）</li>
+    <li>第 80 步：Val Loss = 2.229</li>
+    <li>第 90 步：Val Loss = 2.234（彻底回到起点）</li>
+  </ul>
+  <p>在第 9 章，程序傻傻地一直跑到了第 90 步结束，最终保存在磁盘里的也是第 90 步那个「死记硬背」的坏模型。在真正的工业训练中，一次训练可能要跑几天几夜，我们不可能搬着板凳通宵盯着屏幕手动按停止键。</p>
+  <p><strong>解决方案：Early Stopping（早停机制）+ 自动加载最佳权重。</strong></p>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 8-1 · 配置自动早停机制（EarlyStoppingCallback）</p>
+<pre>from transformers import TrainingArguments, EarlyStoppingCallback
+from trl import SFTTrainer
+
+# 1. 配置训练参数：必须启用 save_strategy 并与 eval_strategy 对齐
+training_args = TrainingArguments(
+    output_dir = "outputs_early_stopped",
+    per_device_train_batch_size = 8,
+    per_device_eval_batch_size  = 8,
+    num_train_epochs = 5,              # 可以放心地把总轮数设大
+    learning_rate = 2e-4,
+    eval_strategy = "steps",           # 按步数评估
+    eval_steps = 20,                   # 每 20 步考一次试
+    save_strategy = "steps",           # 必须与 eval_strategy 一致
+    save_steps = 20,                   # 每次考试的同时保存一份 Checkpoint
+    save_total_limit = 2,              # 硬盘有限，只留最好的 2 份
+    load_best_model_at_end = True,     # ★ 核心：训练结束后自动回滚到考分最高的那个 Checkpoint！
+    metric_for_best_model = "eval_loss",# 以验证集 Loss 最小作为评判标准
+    greater_is_better = False,         # Loss 越小越好
+    logging_steps = 10,
+    report_to = "none"
+)
+
+# 2. 注入早停回调守卫：设置耐心值 (patience)
+trainer = SFTTrainer(
+    model = model,
+    tokenizer = tokenizer,
+    train_dataset = train_ds,
+    eval_dataset = eval_ds,
+    dataset_text_field = "text",
+    max_seq_length = 2048,
+    args = training_args,
+    callbacks = [
+        # 耐心值设为 2：如果连续 2 次考试（40 步）成绩都没有刷新历史纪录，直接掐断训练！
+        EarlyStoppingCallback(early_stopping_patience = 2)
+    ]
+)</pre>
+  </div>
+
+  <aside class="callout tip">
+    <p class="co-label">核心工作机制：耐心值（Patience）</p>
+    <p>如果第 40 步考出了历史最低 2.183，记录被锁定。到了第 60 步考了 2.205（没有进步，耐心值剩 1）；到了第 80 步考了 2.229（依然没有进步，耐心值耗尽清零！）。</p>
+    <p>Trainer 会当场主动踩死刹车，终止后续无意义的轮次，并凭借 <code>load_best_model_at_end=True</code>，<strong>自动将内存里的模型指针还原到第 40 步时的巅峰状态</strong>！</p>
+  </aside>
+
+  <aside class="callout qa">
+    <p class="co-label">读者硬核发问：如果是 Step 35 最佳呢？要不要二阶段放大镜重跑？</p>
+    <p><strong>问：</strong><em>“我们在 Step 40 抓到了最低点，但这是因为我们设了 <code>eval_steps=20</code>（每隔 20 步测一次）。真实的最优解完全有可能落在 Step 35！我们能不能先粗测找出 40，再在 20~60 之间拿放大镜（比如每 2 步测一次）再跑一遍来抓出绝对真神？”</em></p>
+    <p><strong>答：完全可以，而且你在直觉中推导出了打比赛和学术界常用的「二阶段网格细化搜索」！但在真实工业界，工程师通常不会过度追求抓出那个精确的 Step 35，原因有三：</strong></p>
+    <ul>
+      <li><strong>1. 损失平原效应（Flat Minima / 盆地假说）</strong>：<br>
+        大模型参数空间的最优点不是一个针尖，而是一个相对平缓的<strong>宽阔盆地</strong>。从 Step 35 到 Step 40，虽然权重变了 5 次，但考卷 Loss 差异通常只有极其微弱的 0.003（比如 2.180 vs 2.183），在人类的实际文本生成体验上，根本感知不到任何区别。
+      </li>
+      <li><strong>2. 评估本身有昂贵的时间开销（Evaluation Overhead）</strong>：<br>
+        每次算 <code>Validation Loss</code>，GPU 都必须暂停训练、把整个考卷全量前向推理一遍。如果每隔 2 步甚至每步都跑一次评估，GPU 大部分时间都在“做考卷”而不是“学习”，整体训练耗时会暴涨 3~5 倍！
+      </li>
+      <li><strong>3. 验证集本身的微小随机噪声</strong>：<br>
+        验证集只有几十或几百条。Step 35 偶尔比 Step 40 低了 0.002，很可能只是验证集里的某一句话碰巧猜中了概率，并不代表整体泛化能力具有统计学显著优势。
+      </li>
+      <li><strong>工业黄金法则</strong>：根据算力预算把 <code>eval_steps</code> 设为总步数的 5%~10%（比如 100 步的微调设 <code>eval_steps=10</code>，几千步的训练设 <code>eval_steps=100</code>），抓到盆地区间即收工。只有在打 Kaggle 比赛争夺小数点后第四位、或发顶会论文时，才会从 <code>checkpoint-20</code> resume 出来拿放大镜做精细化二阶段搜寻。</li>
+    </ul>
+  </aside>
+
+  <h2 id="ch8-triad">8.2 掌控训练节奏：超参三剑客</h2>
+  <p>很多新手调参靠猜，被戏称为「玄学炼丹」。其实，大模型训练动力学中最核心的三个旋钮有着极其清晰的因果逻辑：</p>
+
+  <figure class="figure">
+    <pre>
+【超参三剑客协作图示】
+
+ 1. 学习率 (Learning Rate) ➔ 步长跨度
+    [太小: 2e-6 原地踏步] ──── [最佳: 2e-4 稳步下山] ──── [过大: 2e-2 飞出悬崖炸炉]
+
+ 2. 有效批次大小 (Effective Batch Size) ➔ 统计视野
+    单步样本太少 (1~2条) ➔ 梯度剧烈晃荡，方向忽左忽右
+    批量样本充足 (16~64条) ➔ 抵消异常噪声，梯度笔直平稳
+    [显存放不下 32 条？] ➔ 开启梯度累加 (以时间换空间)
+
+ 3. 学习率调度器 (LR Scheduler) ➔ 节奏变速箱
+    学习率
+      ▲
+      │       /▔▔▔▔▔▔\             (Warmup 热身: 慢起步防闪腰)
+      │      /        \            (Cosine 衰减: 后期微步慢雕，防震荡)
+      │     /          \
+      └────/────────────\─────► 训练步数 (Steps)
+    </pre>
+    <figcaption>图 8-1 · 超参三剑客的作用机制全景</figcaption>
+  </figure>
+
+  <h3>旋钮 1：学习率（Learning Rate, lr）</h3>
+  <p>在第 9 章我们讲过：Loss 是当前位置的地形高度，梯度是下山最陡的方向，而<strong>学习率决定了每一步往前迈多大</strong>。</p>
+  <ul>
+    <li><strong>若设太大（如 2e-2 或 5e-3）</strong>：步子迈得太大，直接跨过了山谷底部，甚至一脚踩空飞出悬崖。在训练日志中会表现为：Loss 瞬间飙到 10 以上，随后直接报 <code>NaN</code>（Not a Number 溢出爆炸），这在行业里就叫<strong>「炸炉（Divergence）」</strong>。</li>
+    <li><strong>若设太小（如 1e-6）</strong>：步子迈得像蚂蚁爬，训练跑了 500 步 Loss 几乎纹丝不动（平线形态）。</li>
+    <li><strong>经验参考</strong>：对于 LoRA 这种参数量只占 1%~2% 的轻量适配器，最佳学习率通常在 <code>1e-4</code> 到 <code>3e-4</code> 之间（我们一直在用的 <code>2e-4</code> 是极其稳健的甜点位）。</li>
+  </ul>
+
+  <h3>旋钮 2：有效批次大小（Effective Batch Size）与梯度累加</h3>
+  <p>你在写 TypeScript 时肯定明白：从数组里抽样 1 个元素算出的平均值极不稳定；抽样 32 个元素算出的平均值才具有代表性。训练也是同理：<strong>Batch 越大，梯度越准</strong>。</p>
+  <p>但第 9 章的显存数学严酷地限制了我们：在 T4 显卡（16GB）上，单卡物理批次（<code>per_device_train_batch_size</code>）设到 8 差不多就接近显存红线了。如果我想用 32 甚至 64 的大批次来稳定训练，显存装不下怎么办？</p>
+
+  <aside class="callout note">
+    <p class="co-label">ELI5 · 什么是梯度累加（Gradient Accumulation）？</p>
+    <p>想象你要把 32 箱苹果搬上货车，但你的小推车（显存）一次只能装 8 箱：</p>
+    <ul>
+      <li><strong>物理装载</strong>：你推车运 8 箱，先不关货车门（不更新参数）；</li>
+      <li><strong>往返累加</strong>：连续运 4 趟（8 × 4 = 32 箱），把 4 趟运来的苹果总数加在一起；</li>
+      <li><strong>统一下发</strong>：第 4 趟运完后，货车门关闭发车（执行一次优化器 <code>optimizer.step()</code> 更新参数）！</li>
+    </ul>
+    <p>这就是<strong>梯度累加</strong>：在不增加任何显存负担的前提下，纯靠多跑几个微循环，等效模拟出了超大批次的数学稳定性！</p>
+  </aside>
+
+  <p>数学等式：</p>
+  <p style="text-align: center; font-weight: bold; font-size: 1.1em; color: #3d5a73;">
+    有效批次大小 (Effective Batch Size) = per_device_batch_size × gradient_accumulation_steps × GPU卡数
+  </p>
+
+  <h3>旋钮 3：学习率调度器（Scheduler：Warmup + Cosine）</h3>
+  <p>为什么不能用固定的 <code>2e-4</code> 从头跑到尾？</p>
+  <ol>
+    <li><strong>冷启动阶段（Warmup 热身）</strong>：训练刚开始时，LoRA 适配器内部全都是随机初始化的数字（矩阵 A 是高斯随机分布，B 是零矩阵）。如果一开始就给最大油门（最大 lr），猛烈的梯度冲击会瞬间把预训练模型原有的良好语义破坏掉。因此前 5%~10% 的步数必须<strong>从零慢速爬坡</strong>。</li>
+    <li><strong>后半程收敛（Cosine 余弦退火）</strong>：当训练接近尾声，模型已经无限逼近最优解的谷底。此时如果步子依然很大，就会在谷底左右疯狂晃荡、无法稳定沉降。此时学习率像余弦曲线一样平滑减速，有助于模型在谷底做极其细腻的微调。</li>
+  </ol>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 8-2 · 开启 Warmup 与 Cosine 调度器配置</p>
+<pre>training_args = TrainingArguments(
+    output_dir = "outputs_tuned",
+    per_device_train_batch_size = 4,     # 物理小批次（省显存）
+    gradient_accumulation_steps = 4,     # 累加 4 次 ➔ 有效批次 = 4 × 4 = 16！
+    learning_rate = 2e-4,
+    warmup_ratio = 0.1,                  # 前 10% 的步数慢速热身爬坡
+    lr_scheduler_type = "cosine",        # 随后走余弦曲线平滑衰减
+    num_train_epochs = 3,
+    logging_steps = 10,
+    report_to = "none"
+)</pre>
+  </div>
+
+  <h2 id="ch8-evaluation">8.3 评估维度跃迁：跨越 Loss 盲区</h2>
+  <p>在第 9 章中，我们靠 <code>Validation Loss</code> 成功抓到了过拟合。但随着你走进真实工业场景，你必须明白一个事实：</p>
+  <p><strong>Validation Loss 最低，绝对不代表模型在业务上最聪明！</strong></p>
+
+  <h3>Loss 的局限性是什么？</h3>
+  <p>Loss 本质上只是在考核：<strong>模型预测出的每一个 Token，跟人工标注的数据集里的字眼有多接近</strong>。这会导致两种典型误判：</p>
+  <ol>
+    <li><strong>同义不同词被误罚</strong>：标准答案是“开心”，模型回答了“十分愉悦”。在业务上两者意思完全一样甚至更文雅，但因为字面 Token 不匹配，Loss 算出来反而会偏高！</li>
+    <li><strong>安全废话套路刷低分</strong>：模型如果学会了无论问什么都先背诵一句长达 50 字的标准礼貌用语（比如“您好！非常高兴为您解答这个问题，请允许我为您梳理如下内容…”），它的 Loss 会非常好看，但在用户眼里这完全是低智废话。</li>
+  </ol>
+
+  <h3>现代工业界的解法：LLM-as-a-Judge（大模型裁判）</h3>
+  <p>既然传统的数学指标（Loss、BLEU、ROUGE）无法理解复杂的语义逻辑，目前的工业前沿统一转向了**「以大评小（LLM-as-a-Judge）」**：</p>
+
+  <figure class="figure">
+    <pre>
+【LLM-as-a-Judge 大模型裁判自动化评测机制】
+
+       [人类测试集 Prompt] ➔ 提交给两个模型生成回答
+                 │
+                 ├──────────────────────────────┐
+                 ▼                              ▼
+      [基线模型 (微调前)]             [新模型 (微调后)]
+      生成: "多运动多喝水..."         生成: "叮！保持作息、营养..."
+                 │                              │
+                 └──────────────┬───────────────┘
+                                ▼
+                   [打乱顺序（双盲 A/B 测试）]
+                                ▼
+            [强力裁判大模型 (如 Qwen-Max / GPT-4)]
+            裁判 Prompt: "请从准确性、风格契合度、逻辑性打分"
+                                ▼
+            [输出评分报告: 模型 B 获胜，胜率 82.5%]
+    </pre>
+    <figcaption>图 8-2 · 双盲 LLM-as-a-Judge 自动化裁判评估流</figcaption>
+  </figure>
+
+  <p>这套机制通过让更聪明的超级模型充当裁判，甚至采用双盲赛马（A/B Elo 评分），彻底解决了人工盲目抽检看不过来的瓶颈。</p>
+
+  <div class="exercise">
+    <p class="ex-head">练习 8-A · 极端学习率炸炉实证（亲历发散与震荡）</p>
+    <p><strong>目标</strong>：只有亲眼见过炸炉，才真正理解为什么学习率被称为第一杀手。一键复制下方代码，见证把 <code>learning_rate</code> 放大 25 倍（<code>5e-3</code>）时的灾难现场。</p>
+<pre>import os, gc, torch
+from datasets import load_dataset
+from unsloth import FastLanguageModel, train_on_responses_only
+from trl import SFTTrainer
+from transformers import TrainingArguments
+
+# ① 加载底座与 LoRA
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+    max_seq_length = 2048,
+    load_in_4bit = True,
+)
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = 16,
+    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_alpha = 16,
+    lora_dropout = 0,
+    bias = "none",
+    use_gradient_checkpointing = "unsloth",
+)
+
+# ② 准备 300 条短数据并按 8:2 切分
+prompt_style = """### 指令：\n{}\n\n### 输入：\n{}\n\n### 回答：\n{}"""
+EOS = tokenizer.eos_token
+
+raw = load_dataset("shibing624/alpaca-zh", split="train")
+clean = raw.filter(lambda r: 15 < len(r["output"]) < 100 and "{" not in r["output"])
+small = clean.shuffle(seed=42).select(range(300))
+formatted = small.map(lambda r: {"text": prompt_style.format(r["instruction"], r["input"], r["output"]) + EOS})
+
+split_ds = formatted.train_test_split(test_size=0.2, seed=42)
+train_ds = split_ds["train"]
+eval_ds  = split_ds["test"]
+
+# ③ ★ 危险操作：把学习率放大 25 倍设为 5e-3！
+args = TrainingArguments(
+    output_dir = "outputs_exploded",
+    per_device_train_batch_size = 8,
+    per_device_eval_batch_size  = 8,
+    num_train_epochs = 2,
+    learning_rate = 5e-3,        # 正常是 2e-4，这里狂飙到 5e-3
+    logging_steps = 10,
+    eval_strategy = "steps",
+    eval_steps = 20,
+    save_strategy = "no",
+    report_to = "none",
+)
+
+trainer = SFTTrainer(
+    model = model,
+    tokenizer = tokenizer,
+    train_dataset = train_ds,
+    eval_dataset = eval_ds,
+    dataset_text_field = "text",
+    max_seq_length = 2048,
+    args = args,
+)
+trainer = train_on_responses_only(
+    trainer,
+    instruction_part = "### 指令：\n",
+    response_part = "### 回答：\n",
+)
+
+trainer.model.config.use_cache = False
+print("启动极限学习率 (5e-3) 实验...")
+trainer.train()</pre>
+    <ol>
+      <li>直接运行上方代码（耗时不到 1 分钟）。</li>
+      <li>观察控制台前 20 步、前 40 步打印出的 Loss 数值，记录与正常 2e-4 相比发生了什么诡异现象。</li>
+    </ol>
+    <figure class="figure">
+<svg viewBox="0 0 650 250" style="max-width:100%;height:auto" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="学习率 25 倍暴增对比">
+  <rect x="50" y="15" width="560" height="200" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+  <!-- 水平线 -->
+  <line x1="50" y1="200" x2="610" y2="200" stroke="#d9d2c0"/>
+  <line x1="50" y1="155" x2="610" y2="155" stroke="#ece7d9"/>
+  <line x1="50" y1="110" x2="610" y2="110" stroke="#ece7d9"/>
+  <line x1="50" y1="65" x2="610" y2="65" stroke="#ece7d9"/>
+  <line x1="50" y1="20" x2="610" y2="20" stroke="#ece7d9"/>
+
+  <text x="42" y="204" font-size="10" text-anchor="end" fill="#8a8272">1.5</text>
+  <text x="42" y="159" font-size="10" text-anchor="end" fill="#8a8272">3.0</text>
+  <text x="42" y="114" font-size="10" text-anchor="end" fill="#8a8272">5.0</text>
+  <text x="42" y="69" font-size="10" text-anchor="end" fill="#8a8272">7.0</text>
+  <text x="42" y="24" font-size="10" text-anchor="end" fill="#8a8272">9.5</text>
+
+  <!-- x 刻度 -->
+  <text x="140" y="230" font-size="11" text-anchor="middle" fill="#8a8272">Step 20</text>
+  <text x="330" y="230" font-size="11" text-anchor="middle" fill="#8a8272">Step 40</text>
+  <text x="520" y="230" font-size="11" text-anchor="middle" fill="#8a8272">Step 60</text>
+
+  <!-- 正常 2e-4 折线 (绿) -->
+  <polyline points="140,185 330,186 520,185" fill="none" stroke="#2e7d32" stroke-width="2.5"/>
+  <circle cx="140" cy="185" r="4.5" fill="#2e7d32"/>
+  <circle cx="330" cy="186" r="4.5" fill="#2e7d32"/>
+  <circle cx="520" cy="185" r="4.5" fill="#2e7d32"/>
+  <text x="140" y="175" font-size="10" fill="#2e7d32" text-anchor="middle" font-weight="700">2.23</text>
+  <text x="330" y="175" font-size="10" fill="#2e7d32" text-anchor="middle" font-weight="700">2.18</text>
+  <text x="520" y="175" font-size="10" fill="#2e7d32" text-anchor="middle" font-weight="700">2.20</text>
+
+  <!-- 炸炉 5e-3 折线 (红) -->
+  <polyline points="140,30 330,147 520,155" fill="none" stroke="#a03b2a" stroke-width="2.5" stroke-dasharray="5,4"/>
+  <circle cx="140" cy="30" r="6" fill="#a03b2a"/>
+  <circle cx="330" cy="147" r="4.5" fill="#a03b2a"/>
+  <circle cx="520" cy="155" r="4.5" fill="#a03b2a"/>
+  <text x="140" y="48" font-size="11" fill="#a03b2a" text-anchor="middle" font-weight="800">9.01 💥 (暴冲)</text>
+  <text x="330" y="137" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">3.33</text>
+  <text x="520" y="145" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">2.99</text>
+
+  <!-- 图例 -->
+  <line x1="80" y1="242" x2="105" y2="242" stroke="#2e7d32" stroke-width="2.5"/>
+  <text x="110" y="245" font-size="11" fill="#2e7d32">正常学习率 2e-4 验证集 Loss（稳如泰山 ~2.2）</text>
+
+  <line x1="370" y1="242" x2="395" y2="242" stroke="#a03b2a" stroke-width="2.5" stroke-dasharray="5,4"/>
+  <text x="400" y="245" font-size="11" fill="#a03b2a">极限学习率 5e-3 验证集 Loss（首考 9.01 险象环生）</text>
+</svg>
+<figcaption>图 8-2 · 练习 8-A 学生实测：学习率放大 25 倍的灾难现场——第 20 步考卷 Loss 瞬间暴冲至 9.01，模型险些彻底发散炸炉。</figcaption>
+</figure>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>实测日志记录（2026-09-28 · lr=5e-3 · 放大 25 倍极速实测）：</strong></p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Step</th><th>Training Loss（正常 2e-4 vs 暴走 5e-3）</th><th>Validation Loss（正常 2e-4 vs 暴走 5e-3）</th><th>灾难现场诊断</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>20</td>
+            <td>2.09 ➔ <strong>3.50</strong></td>
+            <td>2.23 ➔ <strong style="color: #a03b2a; font-size: 15px;">9.01 💥（暴冲）</strong></td>
+            <td><strong>险些直接发散炸炉！</strong> 学习率过大导致第一脚油门直接飞出悬崖，考卷困惑度飙升到 e^9 ≈ 8103，模型完全在胡乱吐字。</td>
+          </tr>
+          <tr>
+            <td>40</td>
+            <td>1.68 ➔ <strong>2.98</strong></td>
+            <td>2.18 ➔ <strong>3.33</strong></td>
+            <td>在悬崖边缘剧烈震荡，尽管没有报 NaN，但效果远落后于正常值。</td>
+          </tr>
+          <tr>
+            <td>60</td>
+            <td>1.64 ➔ <strong>1.89</strong></td>
+            <td>2.20 ➔ <strong>2.99</strong></td>
+            <td>全场平均 Training Loss <strong>3.40</strong>（正常仅为 1.76，翻倍恶化）。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>核心启示：为什么学习率是第一杀手？</strong></p>
+    <ul>
+      <li><strong>初学者常见的盲目自信</strong>：“把学习率调大一点，模型是不是学得更快？”——实测给出了响亮的耳光：步长放大 25 倍，模型不仅没有更快收敛，反而因为步子太大直接跨过了最优山谷，撞在悬崖峭壁上（Val Loss 冲到 9.01）！</li>
+      <li><strong>幸存者偏差</strong>：如果把学习率再放大到 <code>1e-2</code>，梯度就会直接溢出（Overflow），控制台将直接打印 <code>Loss: nan</code> 并中止训练。LoRA 之所以推荐 <code>1e-4 ~ 3e-4</code>，正是无数前人用算力烧出来的黄金安全区。</li>
+    </ul>
+    </details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 8-B · 自动化早停实战（谷底自动锁死最佳模型）</p>
+    <p><strong>目标</strong>：亲测 <code>EarlyStoppingCallback</code> 守卫，验证训练是否会在过拟合反弹时自动刹车，并准确还原 Step 40 的巅峰权重。</p>
+<pre>import os, gc, torch
+from datasets import load_dataset
+from unsloth import FastLanguageModel, train_on_responses_only
+from trl import SFTTrainer
+from transformers import TrainingArguments, EarlyStoppingCallback
+
+# ① 加载底座与 LoRA
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+    max_seq_length = 2048,
+    load_in_4bit = True,
+)
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = 16,
+    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_alpha = 16,
+    lora_dropout = 0,
+    bias = "none",
+    use_gradient_checkpointing = "unsloth",
+)
+
+# ② 准备 300 条短数据并按 8:2 切分
+prompt_style = """### 指令：\n{}\n\n### 输入：\n{}\n\n### 回答：\n{}"""
+EOS = tokenizer.eos_token
+
+raw = load_dataset("shibing624/alpaca-zh", split="train")
+clean = raw.filter(lambda r: 15 < len(r["output"]) < 100 and "{" not in r["output"])
+small = clean.shuffle(seed=42).select(range(300))
+formatted = small.map(lambda r: {"text": prompt_style.format(r["instruction"], r["input"], r["output"]) + EOS})
+
+split_ds = formatted.train_test_split(test_size=0.2, seed=42)
+train_ds = split_ds["train"]
+eval_ds  = split_ds["test"]
+
+# ③ 配置自动保存最优检查点与定期考核
+args = TrainingArguments(
+    output_dir = "outputs_early_stopped",
+    per_device_train_batch_size = 8,
+    per_device_eval_batch_size  = 8,
+    num_train_epochs = 5,              # 轮数拉长到 5 轮（正常要跑 150 步）
+    learning_rate = 2e-4,              # 稳健甜点学习率
+    logging_steps = 10,
+    eval_strategy = "steps",
+    eval_steps = 20,                   # 每 20 步考一次试
+    save_strategy = "steps",
+    save_steps = 20,                   # 每次考试保存一次 Checkpoint
+    save_total_limit = 3,              # 只保留最近 3 个
+    load_best_model_at_end = True,     # ★ 刹车后自动回滚到考分最高的那个 Checkpoint
+    metric_for_best_model = "eval_loss",
+    greater_is_better = False,         # Loss 越小越好
+    report_to = "none",
+)
+
+# ④ 注入早停回调守卫：耐心值 patience = 2
+trainer = SFTTrainer(
+    model = model,
+    tokenizer = tokenizer,
+    train_dataset = train_ds,
+    eval_dataset = eval_ds,
+    dataset_text_field = "text",
+    max_seq_length = 2048,
+    args = args,
+    callbacks = [
+        EarlyStoppingCallback(early_stopping_patience = 2) # 连续 2 次考试没有进步直接掐断！
+    ]
+)
+trainer = train_on_responses_only(
+    trainer,
+    instruction_part = "### 指令：\n",
+    response_part = "### 回答：\n",
+)
+
+trainer.model.config.use_cache = False
+print("启动带早停机制（Early Stopping）的智能监控训练...")
+train_result = trainer.train()
+
+print(f"\n训练提前结束！总运行步数: {train_result.global_step}（本应跑 150 步）")
+print(f"最佳 Checkpoint 路径: {trainer.state.best_model_checkpoint}")</pre>
+    <ol>
+      <li>直接运行上方代码（耗时约 1 分钟）。</li>
+      <li>观察训练是否在触底反弹后自动提前刹车？</li>
+      <li>记录控制台最终打印的 <code>best_model_checkpoint</code> 是第几步的成果！</li>
+    </ol>
+    <figure class="figure">
+<svg viewBox="0 0 650 260" style="max-width:100%;height:auto" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Early Stopping 自动早停实测">
+  <rect x="50" y="15" width="560" height="210" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+  <!-- 网格 -->
+  <line x1="50" y1="210" x2="610" y2="210" stroke="#d9d2c0"/>
+  <line x1="50" y1="165" x2="610" y2="165" stroke="#ece7d9"/>
+  <line x1="50" y1="120" x2="610" y2="120" stroke="#ece7d9"/>
+  <line x1="50" y1="75" x2="610" y2="75" stroke="#ece7d9"/>
+  <line x1="50" y1="30" x2="610" y2="30" stroke="#ece7d9"/>
+
+  <text x="42" y="214" font-size="10" text-anchor="end" fill="#8a8272">1.2</text>
+  <text x="42" y="169" font-size="10" text-anchor="end" fill="#8a8272">1.5</text>
+  <text x="42" y="124" font-size="10" text-anchor="end" fill="#8a8272">1.8</text>
+  <text x="42" y="79" font-size="10" text-anchor="end" fill="#8a8272">2.1</text>
+  <text x="42" y="34" font-size="10" text-anchor="end" fill="#8a8272">2.4</text>
+
+  <!-- 阶段背景：被省去的 70 步 -->
+  <rect x="370" y="15" width="240" height="195" fill="#2e7d32" opacity="0.06"/>
+  <line x1="370" y1="15" x2="370" y2="210" stroke="#a03b2a" stroke-width="2" stroke-dasharray="4,3"/>
+  <text x="375" y="28" font-size="10.5" fill="#a03b2a" font-weight="700">🛑 Step 80 触发早停刹车</text>
+  <text x="490" y="115" font-size="12" fill="#2e7d32" font-weight="700" text-anchor="middle">✂️ 成功省去 70 步无用算力！</text>
+  <text x="490" y="135" font-size="10" fill="#8a8272" text-anchor="middle">（避免后续 80~150 步深度过拟合）</text>
+
+  <!-- x 刻度 -->
+  <text x="130" y="235" font-size="11" text-anchor="middle" fill="#8a8272">Step 20</text>
+  <text x="210" y="235" font-size="11" text-anchor="middle" fill="#8a8272">Step 40</text>
+  <text x="290" y="235" font-size="11" text-anchor="middle" fill="#8a8272">Step 60</text>
+  <text x="370" y="235" font-size="11" text-anchor="middle" fill="#a03b2a" font-weight="700">Step 80 (停)</text>
+  <text x="490" y="235" font-size="11" text-anchor="middle" fill="#8a8272" stroke-dasharray="2,2">原计划 Step 150</text>
+
+  <!-- Train Loss (蓝) -->
+  <polyline points="130,77 210,142 290,148 370,202" fill="none" stroke="#3d5a73" stroke-width="2.5"/>
+  <circle cx="130" cy="77" r="4" fill="#3d5a73"/><text x="130" y="69" font-size="9.5" fill="#3d5a73" text-anchor="middle">2.09</text>
+  <circle cx="210" cy="142" r="4" fill="#3d5a73"/><text x="210" y="134" font-size="9.5" fill="#3d5a73" text-anchor="middle">1.65</text>
+  <circle cx="290" cy="148" r="4" fill="#3d5a73"/><text x="290" y="140" font-size="9.5" fill="#3d5a73" text-anchor="middle">1.61</text>
+  <circle cx="370" cy="202" r="4" fill="#3d5a73"/><text x="370" y="194" font-size="9.5" fill="#3d5a73" text-anchor="middle">1.26</text>
+
+  <!-- Val Loss (红) -->
+  <polyline points="130,55 210,63 290,58 370,41" fill="none" stroke="#a03b2a" stroke-width="2.5"/>
+  <circle cx="130" cy="55" r="4" fill="#a03b2a"/><text x="130" y="47" font-size="9.5" fill="#a03b2a" text-anchor="middle">2.23</text>
+  
+  <!-- 最佳检查点锁定 -->
+  <circle cx="210" cy="63" r="7" fill="none" stroke="#2e7d32" stroke-width="2"/>
+  <circle cx="210" cy="63" r="4" fill="#2e7d32"/>
+  <text x="210" y="85" font-size="10.5" fill="#2e7d32" font-weight="800" text-anchor="middle">★ checkpoint-40 (2.181 自动锁死)</text>
+
+  <circle cx="290" cy="58" r="4" fill="#a03b2a"/><text x="290" y="50" font-size="9.5" fill="#a03b2a" text-anchor="middle">2.215 (耐心剩1)</text>
+  <circle cx="370" cy="41" r="5" fill="#a03b2a"/><text x="370" y="33" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">2.322 (清零刹车!)</text>
+
+  <!-- 图例 -->
+  <line x1="70" y1="248" x2="95" y2="248" stroke="#3d5a73" stroke-width="2.5"/>
+  <text x="100" y="251" font-size="11" fill="#3d5a73">Training Loss（一路虚假暴跌到 1.26）</text>
+
+  <line x1="330" y1="248" x2="355" y2="248" stroke="#a03b2a" stroke-width="2.5"/>
+  <text x="360" y="251" font-size="11" fill="#a03b2a">Validation Loss（Step 40 触底，Step 80 恶化耗尽耐心）</text>
+</svg>
+<figcaption>图 8-3 · 练习 8-B 学生实测（2026-09-28）：早停机制精准拦截——原计划 150 步，在 Step 80 自动刹车，成功砍掉 47% 无用算力，并将模型指针精确锁死在 Step 40 的全场最佳 Checkpoint！</figcaption>
+</figure>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>实测日志记录（2026-09-28 · 5 Epochs 自动早停实测）：</strong></p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Step</th><th>Training Loss</th><th>Validation Loss</th><th>早停守卫状态监控</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>20</td><td>2.087</td><td>2.234</td><td>正常训练起步</td></tr>
+          <tr><td>40</td><td>1.651</td><td><strong style="color:#2e7d32;">2.181 ★</strong></td><td><strong>刷新全场最低记录！锁定为候选最佳模型</strong></td></tr>
+          <tr><td>60</td><td>1.613</td><td>2.215</td><td>⚠️ 未破记录（耐心值 <code>patience: 2 ➔ 1</code>）</td></tr>
+          <tr><td>80</td><td>1.256</td><td>2.322</td><td>🚨 持续大幅恶化（耐心值 <code>patience: 1 ➔ 0</code>，耗尽清零！）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>控制台终极输出：</strong></p>
+<pre>训练提前结束！总运行步数: 80（本应跑 150 步）
+最佳 Checkpoint 路径: outputs_early_stopped/checkpoint-40</pre>
+    <p><strong>实测成果深度复盘（工业早停机制的三大胜利）：</strong></p>
+    <ul>
+      <li><strong>节约 47% 的真金白银算力</strong>：原本计划跑 150 步，程序在第 80 步自动强行终止，直接省去了后半程 70 步无意义的计算开销。</li>
+      <li><strong>粉碎“假繁荣”陷阱</strong>：在第 80 步时，Training Loss 跌到了极其漂亮的 <strong>1.256</strong>，但此时面对未见过的考卷（Val Loss 已经恶化到 2.322），模型已经陷入了严重的死记硬背。</li>
+      <li><strong>毫秒级自动回滚巅峰</strong>：凭借 <code>load_best_model_at_end=True</code>，虽然训练在第 80 步被掐断，但内存与最终输出的模型已被系统<strong>自动安全回滚至第 40 步（checkpoint-40）</strong>。这正是无人值守、现代自动化大模型训练流水线的核心基石。</li>
+    </ul>
+    </details>
+  </div>
+
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li><strong>早停防过拟合闭环</strong>：<code>EarlyStoppingCallback</code> 配合 <code>load_best_model_at_end=True</code>，在验证集指标连续不涨时自动掐断训练，自动提取谷底巅峰模型。</li>
+      <li><strong>超参三剑客逻辑清晰</strong>：
+        <ul>
+          <li>学习率决定步幅（LoRA 推荐 1e-4 ~ 3e-4，过大炸炉，过小瘫痪）；</li>
+          <li>梯度累加用时间换空间，突破物理显存限制拼出大有效批次；</li>
+          <li>Warmup 热身防启动闪腰，Cosine 余弦衰减助推谷底精致收敛。</li>
+        </ul>
+      </li>
+      <li><strong>评测体系跃迁</strong>：字符匹配级别的 Loss 存在盲区，采用强力模型充当裁判的 <strong>LLM-as-a-Judge</strong> 是现代工业评估对话与业务能力的主流基石。</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>Early Stopping 早停机制</dt><dd>监控验证集指标，当连续若干步（patience）无突破时自动中断训练以防止过拟合的守卫技术</dd>
+    <dt>Gradient Accumulation 梯度累加</dt><dd>在反向传播时不立即更新权重，而是将多个微批次的梯度相加后再统一更新，以时间换取大 Batch 稳定性的显存优化方案</dd>
+    <dt>Warmup 热身</dt><dd>在训练初期将学习率从 0 线性增加到目标值的策略，防止冷启动时随机初始化的梯度猛烈冲撞破坏底座先验知识</dd>
+    <dt>Cosine Decay 余弦退火</dt><dd>学习率随着训练推进按余弦波平滑下降的衰减策略，帮助模型在后期精准逼近损失曲面的极小值点</dd>
+    <dt>LLM-as-a-Judge 大模型裁判</dt><dd>利用更高级别的大模型（如 GPT-4 / Qwen-Max）对微调模型生成的回答进行多维度自动化打分或双盲 A/B 裁决的现代评测标准</dd>
+  </dl>
+</section>

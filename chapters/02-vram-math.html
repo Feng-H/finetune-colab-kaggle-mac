@@ -1,0 +1,146 @@
+<section class="chapter" id="ch2" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 1 · 显存数学：显存账本与真卡实测</p>
+    <h1>第 2 章 · 显存账本：为什么 7B 塞不进 16GB</h1>
+    <p class="abstract">训练之前先算账。显存是硬上限——超了不是变慢，是 CUDA out of memory 当场死亡。本章教你用一支笔算出任何「模型 × 方法」组合的显存需求，这是微调方案选型的第一依据。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li>说出训练态显存的四件套（权重/梯度/优化器/激活）与各自字节账</li>
+      <li>用统一公式手算全参 fp32、LoRA、QLoRA 的显存需求</li>
+      <li>解释推理为什么比训练省显存</li>
+      <li>下节在 Colab T4 上实测验证手算</li>
+    </ul>
+  </aside>
+
+  <h2 id="ch2-why">2.1 为什么第一课是算账</h2>
+  <p>T4 是 16GB，L4 是 24GB，A100 是 40GB——显存是<strong>硬上限</strong>（乐队版：排练室只有 16 平米，乐器、设备、谱架、成员全得挤在里面，挤不下就没法排练）。方案选型的第一问永远是：<strong>这套模型 × 方法，装得进我的卡吗？</strong>这个问题不需要跑代码，一支笔就能回答。</p>
+
+  <h2 id="ch2-bytes">2.2 第一笔账：参数的字节</h2>
+  <p>模型参数就是一堆浮点数，每个 float32（fp32）占 <strong>4 字节</strong>（fp16 减半 2 字节；4bit 量化 ≈ 0.5 字节）。于是 7B 模型的权重体积：</p>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>float 和 fp 是什么关系？</p>
+    <p><strong>答：</strong>fp = floating point（浮点）的缩写；float32 与 fp32 是同一个东西的两种写法（语言类型名 vs 论文简称），fp16/fp64 同理。彩蛋：Python 内置 <code>float</code> 是 64 位（fp64），而 <code>torch.tensor(2.0)</code> 默认 fp32——深度学习的默认精度与 Python 默认浮点不是一回事，dtype 对不上是高频报错源。</p>
+  </aside>
+  <div class="example">
+    <p class="ex-head">例 2-1 · 7B 权重有多大</p>
+<pre>7 × 10⁹ 参数 × 4 字节 = 28 × 10⁹ 字节 = 28 GB</pre>
+  </div>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答（学生建议采纳）</p>
+    <p><strong>问：</strong>有没有不用每次乘 10⁹ 的快查法？</p>
+    <p><strong>答：</strong>记「每 1B 参数」常数：fp32=<strong>4 GB</strong>、fp16=<strong>2 GB</strong>、int8=<strong>1 GB</strong>、4bit=<strong>0.5 GB</strong>——任何模型直接乘 B 数：7B@4bit = 3.5 GB，4B@fp32 = 16 GB。（未标精度时 fp16 记 2、4bit 记 0.5，覆盖本书全部心算。）</p>
+  </aside>
+  <p>28 GB &gt; 16 GB——<strong>光是权重就爆了 T4</strong>，什么都还没干。所以「全参微调 7B」在小卡上不是慢，是不可能。</p>
+
+  <h2 id="ch2-four">2.3 第二笔账：训练态四件套</h2>
+  <p>训练不止装权重。全参训练（fp32 + Adam）时每个参数背后跟着一串开销：</p>
+  <div class="tablewrap"><table>
+    <caption>表 2-1 · 全参训练显存四件套（fp32 + Adam）</caption>
+    <thead><tr><th>件</th><th>字节/参数</th><th>7B 时</th><th>来历</th></tr></thead>
+    <tbody>
+      <tr><td>① 权重 W</td><td>4</td><td>28 GB</td><td>模型本体</td></tr>
+      <tr><td>② 梯度 G</td><td>4</td><td>28 GB</td><td>1.3 节 backward 的产物</td></tr>
+      <tr><td>③ 优化器状态</td><td>8</td><td>56 GB</td><td>Adam 一阶+二阶动量各 4 字节</td></tr>
+      <tr><td>④ 激活值</td><td>随 batch/序列长</td><td>数 GB 级</td><td>forward 中间结果，backward 要用</td></tr>
+    </tbody>
+  </table></div>
+  <p>前三件合计 <strong>16 字节/参数</strong>——训练态账单是 fp32 权重的 <strong>4 倍</strong>。7B 全参 ≈ <strong>112 GB</strong>（不含激活）：A100 40GB 单卡也装不下，这就是全参微调要靠多卡的原因。</p>
+
+  <aside class="callout note">
+    <p class="co-label">注</p>
+    <p>优化器为什么存两份？Adam 给每个参数记「最近梯度的平均」（方向惯性）和「最近梯度平方的平均」（步长自适应）——1.4 节说「比朴素 SGD 聪明」的代价就在这 8 字节里。</p>
+  </aside>
+
+  <h2 id="ch2-formula">2.4 统一公式与三条救命路线</h2>
+  <p>观察四件套的结构可以提炼出<strong>统一公式</strong>——②③只挂在<strong>可训练参数</strong>上，①的字节由<strong>精度</strong>决定：</p>
+  <div class="example">
+    <p class="ex-head">例 2-2 · 显存统一公式（忽略激活）</p>
+<pre>显存 ≈ N_全部 × 精度字节  +  N_可训练 × 12 字节（梯度 4 + 优化器 8）  +  激活</pre>
+  </div>
+  <p>所有主流方案都是在这个公式的两项上做文章：</p>
+  <div class="tablewrap"><table>
+    <caption>表 2-2 · 方案路线图（7B 模型，忽略激活）</caption>
+    <thead><tr><th>方案</th><th>N_全部精度</th><th>N_可训练</th><th>账单</th></tr></thead>
+    <tbody>
+      <tr><td>全参 fp32</td><td>×4</td><td>7B</td><td>28 + 84 = <strong>112 GB</strong></td></tr>
+      <tr><td>全参 fp16</td><td>×2</td><td>7B</td><td>14 + 84 = <strong>98 GB</strong>（③仍按 fp32 存）</td></tr>
+      <tr><td>LoRA（fp16 底座）</td><td>×2</td><td>~0.02B</td><td>14 + 0.24 ≈ <strong>14.2 GB</strong>（L4 可训）</td></tr>
+      <tr><td>QLoRA（4bit 底座）</td><td>×0.5</td><td>~0.02B</td><td>3.5 + 0.24 ≈ <strong>3.7 GB → T4 可训</strong></td></tr>
+    </tbody>
+  </table></div>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>全参 fp16 行里的 84 GB 怎么来的？</p>
+    <p><strong>答：</strong>代回统一公式的第二项：N_可训练 × 12 字节 = 7B × 12（②梯度 4 + ③优化器 8）。括号「③仍按 fp32 存」即关键：权重可减半，梯度与优化器仍按 fp32 记账（真实混合精度还要多存一份 fp32 主权重，实际更高——本表为保守近似）。读表心法：每行都把两个格子代回公式的两项。</p>
+  </aside>
+
+  <p>对照 1.5 节 ΔW=BA：rank 16 时 7B 模型的全部 B、A 增量约两千万参数（0.02B）——它们才需要梯度与优化器，底座冻结只付「存放费」。<strong>「T4 上微调 7B」不是玄学，是算术。</strong></p>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>权重①到底能不能砍？</p>
+    <p><strong>答：</strong>能——量化就是砍①：加载时把权重压到低精度存放（4bit ≈ 0.5 字节），forward 仍在场、只是精度变低。LoRA 只砍②③（少交税，权重原样加载）；QLoRA = LoRA + 再砍①（存放减负）。易混点：「必须在场」≠「必须原精度」。</p>
+  </aside>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>推理为什么比训练省显存？</p>
+    <p><strong>答：</strong>推理只有 1.1 节的①前向——②梯度③优化器是 1.3/1.4 节训练循环的产物，推理根本不需要；激活也只保留当前层。7B fp16 推理 ≈ 14 GB，int4 量化 ≈ 3.5 GB——这正是 Ollama 能在你电脑里跑大模型的原因（模块 5 亲手做）。</p>
+  </aside>
+
+  <div class="exercise">
+    <p class="ex-head">练习 2-A · 全参账单（照公式代）</p>
+    <ol>
+      <li>Qwen3-4B（按 4×10⁹ 参数计）全参 fp32 训练，忽略激活，需要多少 GB？写出算式。</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生答案（2026-09-25）：</strong>16 + 16×3 = <strong>64 GB</strong>（用自己的 1B 换算尺：4B@fp32 权重=16；②=16、③=32）</p>
+    <p><strong>批改：</strong>满分——分解漂亮：①16 + (②16+③32)=48，正是「训练态=权重×4」的独立推导。4×10⁹×16 字节 = 64 GB ✓。</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 2-B · QLoRA 账单（公式两项都用）</p>
+    <ol>
+      <li>7B 模型 QLoRA：底座 4bit、可训练增量 0.02B——训练态显存（忽略激活）共多少 GB？写出算式。</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生答案（2026-09-25）：</strong>7×0.5 + 0.24 = <strong>3.74 GB</strong></p>
+    <p><strong>批改：</strong>满分——公式两项精确代入：底座 4bit（换算尺 7×0.5）+ 增量税 0.02B×12 字节=0.24 GB，与表 2-2 一致。</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 2-C · 概念题（为什么砍②③不砍①）</p>
+    <ol>
+      <li>（口语题）LoRA 砍的是梯度+优化器（②③）而不是权重（①），为什么？①能砍吗？谁砍了它？</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生答案（2026-09-25）：</strong>梯度+优化器是微调的产物；权重是原模型内容，不能砍。</p>
+    <p><strong>批改：</strong>半对——②③确是训练循环对可训练参数征的税（推理时不存在）✓；但「①不能砍」与学生自己的 2-B 算式矛盾：7×0.5 正是砍了①（量化）。修正详见 2.4 节读者问答。</p></details>
+  </div>
+
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li>训练态四件套：权重、梯度、优化器、激活；fp32+Adam 下前三件 = 16 字节/参数</li>
+      <li>统一公式：显存 ≈ 全参数×精度字节 + 可训练参数×12 字节 + 激活</li>
+      <li>LoRA 砍②③（只训增量），QLoRA 连①也砍（底座量化 4bit）——7B 从 112GB 降到 3.7GB</li>
+      <li>推理省在：没有②③，激活也只剩当前层</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>显存 OOM</dt><dd>out of memory——超出显卡容量，训练当场死亡（不是变慢）</dd>
+    <dt>fp32 / fp16 / 4bit</dt><dd>参数精度：4 / 2 / 0.5 字节每参数；精度换显存</dd>
+    <dt>优化器状态</dt><dd>Adam 的两个动量（方向惯性+步长自适应），8 字节/参数</dd>
+    <dt>激活值 activation</dt><dd>forward 的中间结果，backward 计算梯度时要用到</dd>
+    <dt>量化 quantization</dt><dd>把高精度参数压到低精度存储（QLoRA 用 nf4）；底座不动，只压存放</dd>
+    <dt>混合精度训练</dt><dd>权重/计算用低精度、优化器保留高精度的折中方案</dd>
+  </dl>
+</section>

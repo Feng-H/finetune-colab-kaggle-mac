@@ -1,0 +1,511 @@
+<section class="chapter" id="ch10" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 5 · 上量部署：高并发架构与端侧 Cookbook</p>
+    <h1>第 10 章 · 部署架构：模型合并、4-bit GGUF 量化与并发</h1>
+    <p class="abstract">训练只是手段，上线交付才是终局。在第 10 章我们锁定了泛化最佳的 Checkpoint。本章彻底打通交付闭环：将 LoRA 增量无缝焊回底座（Merge）；通过 GGUF 与 AWQ 量化将模型体积再削减 70%，实现零显卡甚至 Mac 笔记本纯离线飞速运行（Ollama）；最后揭秘生产级万级并发的工业底座 vLLM 与 PagedAttention 显存分页魔法。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li><strong>踏板焊死（LoRA Merge）</strong>：理解为什么部署前必须执行 <code>merge_and_unload</code>，产出完全自包含的独立模型权重</li>
+      <li><strong>量化压缩（Quantization）的数学直觉</strong>：回顾第 10 章显存账本，搞懂从 FP16 到 INT4（GGUF / AWQ）如何做到显存再砍半而智商几乎不降</li>
+      <li><strong>边缘与本地离线交付（Ollama + GGUF）</strong>：将微调成果打包导出，直接在个人 Mac 电脑或终端命令行离线运行，无需 Python / PyTorch 环境</li>
+      <li><strong>工业生产级推理引擎双雄（vLLM 与 SGLang）</strong>：
+        <ul>
+          <li>为什么商业后端严禁用原生 <code>model.generate()</code>？深度解构 KV Cache 显存账本</li>
+          <li><strong>vLLM</strong>：图解操作系统级 <strong>PagedAttention</strong> 分页内存与<strong>连续批处理（智能电梯）</strong></li>
+          <li><strong>SGLang</strong>：解密专为多 Agent 与复杂逻辑而生的 <strong>RadixAttention（树状前缀路由）</strong>与编译级 JSON 状态机加速</li>
+          <li>掌握工业部署「三剑客」（llama.cpp / vLLM / SGLang）的场景化终极选型</li>
+        </ul>
+      </li>
+      </ul>
+  </aside>
+
+  <figure class="figure">
+    <pre>
+【现代大模型推理部署「三足鼎立」全景图】
+
+                    ┌── 训练产物: 独立 LoRA Adapter (几十 MB)
+                    │
+                    ▼
+         [执行 merge_and_unload()] ─── 把增量永久焊回底座权重
+                    │
+                    ▼
+            [完整合并模型 (FP16)] ─── 约 1.2GB ~ 16GB
+                    │
+       ┌────────────┼───────────────────────────┐
+       ▼            ▼                           ▼
+ 【生态 1: 端侧单兵】   【生态 2: 企业航母】         【生态 3: 智能体新贵】
+  llama.cpp / Ollama    vLLM                        SGLang
+ -----------------    --------------------        --------------------
+ • 载体: GGUF 4-bit   • 载体: AWQ / FP8 / BF16    • 载体: AWQ / FP8 / BF16
+ • 核心: 零环境依赖   • 核心: PagedAttention      • 核心: RadixAttention 树状路由
+ • 场景: Mac/CPU 离线 • 场景: 通用高吞吐 SaaS API • 场景: 多 Agent / 强 JSON / R1推理
+    </pre>
+    <figcaption>图 9-0 · 现代大模型三大主流推理引擎（llama.cpp / vLLM / SGLang）的生态分工版图</figcaption>
+  </figure>
+
+  <h2 id="ch9-merge">9.1 踏板焊死：LoRA Merge 的本质与实操</h2>
+  <p>在第 10 章和第 10 章中，我们反复强化过一个概念：<strong>LoRA 只是挂在底座上的外置效果器踏板</strong>。我们在训练时，底座权重 <i>W</i><sub>0</sub> 始终被冻结，我们只训练了低秩矩阵 <i>A</i> 和 <i>B</i>（也就是几十 MB 的 <code>adapter_model.safetensors</code>）。</p>
+  <p>但在最终交付给用户或者部署到服务器时，如果依然保留“底座 + 外挂踏板”的形态，会带来严重的生产缺陷：</p>
+  <ol>
+    <li><strong>推理延迟增加</strong>：每次计算前向传播时，系统不仅要算底座的矩阵乘，还要额外算一次踏板的低秩乘法再相加（<i>W</i><sub>0</sub><i>x</i> + (<i>α</i> / <i>r</i>) · <i>B</i> · <i>A</i> · <i>x</i>），拖慢单字生成速度。</li>
+    <li><strong>软件栈依赖繁重</strong>：必须依赖 Python、PyTorch、PEFT 等极其庞大的深度学习框架，无法直接使用纯 C++ 编写的极速推理框架（如 llama.cpp）。</li>
+  </ol>
+
+  <h3>数学上的「物理焊死」</h3>
+  <p>还记得我们在第 10 章讲的矩阵加法吗？LoRA 的数学本质就是：</p>
+
+  <div class="formula-block">
+    <i>W</i><sub>最终</sub> = <i>W</i><sub>0</sub> + <span class="frac"><span class="num"><i>α</i></span><span class="den"><i>r</i></span></span> · (<i>B</i> × <i>A</i>)
+  </div>
+
+  <p>既然 <i>W</i><sub>0</sub> 是一个常数矩阵，<i>B</i> × <i>A</i> 算出来的也是一个同样形状的常数矩阵，<strong>我们为什么不在离线时直接把它俩做一次矩阵加法加在一起呢？</strong></p>
+  <p>这就是 <strong>Merge（合并）</strong>：将踏板增量永久焊回底座。加完之后，踏板的使命彻底完成，可以将其从内存中彻底卸载（Unload）。合并后的模型与原本的预训练模型在结构上 100% 一模一样，拥有完全相同的层数和参数形状！</p>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 9-1 · 使用 Unsloth 执行一键安全合并与导出</p>
+<pre>from unsloth import FastLanguageModel
+
+# 1. 载入微调后的底座与最佳 Checkpoint 踏板
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "outputs_early_stopped/checkpoint-40",
+    max_seq_length = 2048,
+    load_in_4bit = False, # 导出时建议用 16bit 精度合并，防止二次精度损失
+)
+
+# 2. 焊死踏板并保存为标准的 Hugging Face 格式
+merged_dir = "qwen3_merged_16bit"
+print("正在执行 merge 并导出完整模型...")
+model.save_pretrained_merged(
+    merged_dir,
+    tokenizer,
+    save_method = "merged_16bit" # 将 LoRA 增量相加并保存为标准 16bit 格式
+)
+print(f"合并完成！产物已存入: {merged_dir}")</pre>
+  </div>
+
+  <h2 id="ch9-quantization">9.2 压缩的艺术：从 16bit 到 4bit GGUF 量化</h2>
+  <p>当执行完 Merge 之后，如果你查看导出的目录大小，一个 Qwen3-0.6B 的 16-bit 模型大约占用 <strong>1.2GB</strong> 的硬盘与内存；如果微调的是 7B/8B 模型，16-bit 权重将高达 <strong>15GB~16GB</strong>！</p>
+  <p>回到我们在第 10 章学过的显存数学公式：</p>
+  <p style="text-align: center; font-style: italic; color: #8a8272;">
+    显存占用 = 参数量 × 每个参数所占字节数（Bytes）
+  </p>
+  <ul>
+    <li>16-bit（FP16 / BF16）：每个参数占 <strong>2 个字节（16 位二进制）</strong>。</li>
+    <li>8-bit（INT8）：每个参数占 <strong>1 个字节</strong>，显存瞬间减半。</li>
+    <li>4-bit（INT4）：每个参数仅占 <strong>0.5 个字节（4 位二进制，只能表示 0~15 共 16 个数字）</strong>，显存直降 75%！</li>
+  </ul>
+
+  <h3>为什么参数压到 4 位（只有 16 种可能），模型居然不会变智障？</h3>
+  <aside class="callout note">
+    <p class="co-label">ELI5 · 什么是量化（Quantization）？（标尺映射直觉）</p>
+    <p>想象一张高精度的 4K 彩色照片：每个像素点用 24 位真彩色表示，文件有 50MB。如果你用 Photoshop 把它另存为 256 色的 GIF 格式，文件瞬间缩小到 1MB，但人眼看起来依然能够极其清晰地分辨画面里的景物！</p>
+    <p>大模型权重也是如此：神经网络的几亿个浮点数大多集中在一个很窄的钟形正态分布区间里。<strong>量化（Quantization）本质上就是拿一把只有 16 个刻度的精简标尺，把复杂的 3.1415926... 映射到这 16 个离散格子里。</strong> 经过精巧设计的现代量化算法（如 GGUF、AWQ），几乎能够 99% 完整保留原始模型的逻辑推理能力！</p>
+  </aside>
+
+  <aside class="callout note">
+    <p class="co-label">ELI5 · 扫盲三个怪名字：llama.cpp、GGUF 和 q4_k_m 到底是什么？</p>
+    <p>初学者第一次看到这串外星暗号很容易懵，用前端和打包工具直觉秒懂：</p>
+    <ul>
+      <li><strong>1. llama.cpp 是什么？</strong><br>
+        2023 年开源大神 Georgi Gerganov 干了一件震撼世界的事：他<strong>完全不用 Python，纯手写原生 C/C++</strong> 重写了大模型的运行代码！这意味着运行大模型不再需要安装巨大的 Python 环境和 CUDA 驱动，即使在没有显卡的普通笔记本或 Mac 上也能飞速运行。它是整个本地大模型生态的“发动机底盘”。
+      </li>
+      <li><strong>2. GGUF 格式是什么？（单文件绿色安装包）</strong><br>
+        在 Hugging Face 上，一个模型通常由 10 几个文件组成（<code>config.json</code>、分卷的 <code>.safetensors</code>、<code>tokenizer.json</code>）。这就像前端未打包的散装源码工程。<br>
+        <strong>GGUF 就是用 Webpack / Vite 打包后产出的单一 <code>bundle.js</code></strong>！它把参数权重、词表、超参配置<strong>全部融进一个唯一的 <code>.gguf</code> 二进制文件</strong>中。随便拷给谁，点开就能跑，彻底告别“缺文件/路径配置错误”。
+      </li>
+      <li><strong>3. <code>q4_k_m</code> 是什么暗号？（量化档位规格）</strong><br>
+        拆开来看三个字母：
+        <ul>
+          <li><code>Q4</code>：<strong>4-bit 量化</strong>（每个参数压缩到 4 位二进制）。</li>
+          <li><code>_K</code>：<strong>K-quants 混合精度技术</strong>（不是一刀切全部压到 4 位，关键的注意力层保留更高精度，次要的层狠压，聪明省显存）。</li>
+          <li><code>_M</code>：<strong>Medium（中等尺寸档位）</strong>。同理还有 <code>_S</code>（Small 极限压缩）和 <code>_L</code>（Large 偏大偏精细）。<code>q4_k_m</code> 是全世界公认在体积缩水 70% 与保留 99% 智商之间<strong>性价比最高的黄金甜点档位</strong>！</li>
+        </ul>
+      </li>
+    </ul>
+  </aside>
+
+  <p>在交付体系中，目前工业界有两大统治级量化生态：</p>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>量化格式</th><th>主攻生态与载体</th><th>核心优势</th><th>典型适用场景</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>GGUF</strong><br>(llama.cpp)</td>
+          <td>Ollama、LM Studio、纯 CPU / Mac Apple Silicon</td>
+          <td><strong>单文件一体化打包</strong>（权重与 Tokenizer 融为一个 <code>.gguf</code> 文件）。支持 CPU/GPU 混合分层推理，Mac 电脑甚至手机首选。</td>
+          <td>个人桌面、隐私离线设备、边缘计算盒子、本地测试。</td>
+        </tr>
+        <tr>
+          <td><strong>AWQ / GPTQ</strong></td>
+          <td>vLLM、TensorRT-LLM、NVIDIA GPU 数据中心</td>
+          <td>针对 GPU 张量计算深度优化（保留 1% 核心重要权重不压缩），吞吐量极高。</td>
+          <td>云端高并发生产服务器、企业对外 API 接口。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="ch9-ollama">9.3 边缘离线交付：Ollama + GGUF 一键上云上端</h2>
+  <p>如果你想把微调好的模型交给前端同事、测试人员、或者部署到客户没有昂贵 GPU 的普通办公电脑上，<strong>Ollama 是目前全球最受欢迎的终极交付工具</strong>。</p>
+
+  <h3>为什么选择 Ollama？</h3>
+  <ol>
+    <li><strong>环境零依赖</strong>：不需要安装臃肿的 Python、不需要配置 CUDA 驱动、不用装 PyTorch。直接下载一个几兆的安装包双击即可运行。</li>
+    <li><strong>原生跨平台加速</strong>：在 Mac（M1/M2/M3/M4）芯片上，它会自动调用 Apple Silicon 的统一内存架构与 Metal GPU 加速；在普通电脑上，纯靠 CPU 也能跑出极高的推理速度。<strong>（Ollama 在 Mac 底层运行的其实正是编译了 Metal 的 llama.cpp！）</strong></li>
+    <li><strong>自带标准的 OpenAI 兼容 API 接口</strong>：在后台默默提供标准的 <code>http://localhost:11434/v1/chat/completions</code> 接口，所有现成的前端 Web 界面（如 Open-WebUI、Chatbox）无缝直连！</li>
+  </ol>
+
+  <aside class="callout qa">
+    <p class="co-label">读者硬核发问：Mac M 芯片的最佳环境到底是谁？llama.cpp 还是苹果亲儿子 MLX？</p>
+    <p><strong>问：</strong><em>“Mac M 芯片上也是用 llama.cpp 吗？它是最佳选择吗？我怎么听说还有苹果自家的 MLX 框架？”</em></p>
+    <p><strong>答：直击 Apple Silicon 本地生态的灵魂之选！结论一句话：分发体验选 llama.cpp（Ollama），极致性能与深度调优选 MLX！</strong></p>
+
+    <div class="tablewrap">
+      <table style="width: 100%; table-layout: fixed;">
+        <thead>
+          <tr>
+            <th style="width: 25%;">对比维度</th>
+            <th style="width: 38%;">llama.cpp / Ollama（生态之王）</th>
+            <th style="width: 37%;">Apple MLX（苹果亲儿子）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>出身与血统</strong></td>
+            <td>社区大神纯 C++ 编写（起初就是在 MacBook 上开发的），底层调用 Apple Metal。</td>
+            <td><strong>苹果官方机器学习研究团队（Apple ML Research）</strong>专为 M 芯片统一内存自研的原生框架。</td>
+          </tr>
+          <tr>
+            <td><strong>支持格式</strong></td>
+            <td><strong>GGUF 单文件</strong>（全世界最通用的本地分发格式）。</td>
+            <td>标准的 Hugging Face <code>safetensors</code> / <code>mlx-community</code> 格式。</td>
+          </tr>
+          <tr>
+            <td><strong>能力边界</strong></td>
+            <td>主要专注<strong>极速量化推理</strong>，对模型微调支持较弱。</td>
+            <td><strong>推理 + 本地微调全能！</strong>用 <code>mlx-lm</code> 甚至能直接在 64G/128G Mac 上做本地 LoRA 微调！</td>
+          </tr>
+          <tr>
+            <td><strong>性能表现</strong></td>
+            <td>小模型与单次问答启动极快，全平台一致。</td>
+            <td>在大显存 M-Max/Ultra 芯片上，因深度压榨<strong>统一内存零拷贝带宽</strong>，长文本 Prompt 处理吞吐量往往超越 llama.cpp！</td>
+          </tr>
+          <tr>
+            <td><strong>跨平台性</strong></td>
+            <td><strong>全平台通吃</strong>（Mac、Windows、Linux、甚至 Android）。</td>
+            <td><strong>Mac 独占</strong>（只能在 Apple Silicon 上跑，非苹果设备无法运行）。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><strong>工程师实战选型指南：</strong></p>
+    <ul>
+      <li>如果你只想<strong>开箱即用、一键拉起模型当个人助手、配合前端 Web 界面使用</strong>，或者要将微调好的模型打包发给别人（无论对方是 Mac 还是 Windows）：<strong>坚决选 GGUF + Ollama</strong>。</li>
+      <li>如果你是一名<strong>Mac 资深开发者，拥有 32G/64G/128G 统一内存的 M Pro/Max/Ultra</strong>，想写 Python 代码直接操纵模型，甚至想完全脱离云端、在自己的 Mac 上纯离线做 LoRA 训练与微调：<strong>果断选择 <code>mlx-lm</code>！</strong></li>
+    </ul>
+
+    <div style="background: var(--paper-warm); border-left: 3px solid var(--accent); padding: .7rem 1rem; margin-top: .8rem; border-radius: 4px;">
+      <p style="margin: 0 0 .4rem; font-weight: 700; color: var(--accent-deep);">📌 特别专论：MacBook Air M1 (8GB 内存) 黄金生存法则</p>
+      <p style="margin: 0 0 .4rem; font-size: 13.5px; line-height: 1.6;">
+        如果你手里是最经典的 8GB M1 MacBook Air，<strong>彻底放弃本地用 MLX 微调的幻想</strong>（8GB 扣除 macOS 系统自身占用的 3.5GB，剩余显存不足 4.5GB，本地跑训练会瞬间撑爆并疯狂刷爆 SSD 虚拟内存交换）。
+      </p>
+      <p style="margin: 0; font-size: 13.5px; line-height: 1.6;">
+        <strong>最佳且唯一的王者方案：云端训练 + 本地 GGUF (Ollama) 推理！</strong><br>
+        在 Colab 免费用云端 T4 算力微调出模型，导出为 4-bit GGUF，下载到你的 M1 本地用 Ollama 跑：
+        <br>• <strong>0.6B（我们练的 Qwen3）</strong>：Q4_K_M 仅占 <strong>~450MB</strong> 内存，M1 上跑出 60~80 字/秒的逆天速度，轻若无物！
+        <br>• <strong>1.5B ~ 3B 模型</strong>：占 <strong>1.5G ~ 2.5G</strong> 内存，8G M1 日常后台常驻毫无压力。
+        <br>• <strong>7B/8B 模型</strong>：量化后占 ~4.8G，会逼近 8G 极限触发轻微卡顿，不建议多开软件。
+      </p>
+    </div>
+  </aside>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 9-2 · 在 Unsloth 中一键直接导出 GGUF 格式</p>
+<pre>from unsloth import FastLanguageModel
+
+# Unsloth 极度强大：支持在合并模型的同时，直接在底层调用 llama.cpp 编译出 GGUF！
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "outputs_early_stopped/checkpoint-40",
+    max_seq_length = 2048,
+    load_in_4bit = False,
+)
+
+# 一键导出为 Q4_K_M（4bit 平衡最佳量化档位）
+print("正在直接导出 GGUF 格式...")
+model.save_pretrained_gguf(
+    "qwen3_custom_gguf",
+    tokenizer,
+    quantization_method = "q4_k_m" # Q4_K_M 是工业界公认在体积与智商间最完美的平衡档
+)
+print("GGUF 导出完成！单文件即可分发！")</pre>
+  </div>
+
+  <h3>配置 Modelfile：在本地 1 秒拉起服务</h3>
+  <aside class="callout note">
+    <p class="co-label">ELI5 · 什么是 Modelfile？（Docker 容器镜像直觉）</p>
+    <p>如果你在后端或全栈开发中用过 Docker，你一定写过 <code>Dockerfile</code>：</p>
+    <pre><code>FROM node:20
+WORKDIR /app
+COPY . .
+CMD ["node", "server.js"]</code></pre>
+    <p><strong>Ollama 的 Modelfile 完完全全就是大模型世界的 Dockerfile！</strong></p>
+    <ul>
+      <li><code>FROM</code>：指定基础镜像路径（就是你的 <code>.gguf</code> 文件）。</li>
+      <li><code>SYSTEM</code>：设定容器运行时的全局默认人设提示词。</li>
+      <li><code>PARAMETER</code>：设定超参数（比如发散度 <code>temperature</code>）。</li>
+      <li>敲 <code>ollama create</code> 就如同 <code>docker build</code> 打包镜像；敲 <code>ollama run</code> 就如同 <code>docker run</code> 秒级拉起容器开始对话！</li>
+    </ul>
+  </aside>
+  <p>导出得到 <code>.gguf</code> 文件后，无论放在你的 Mac 上还是服务器上，只需要写一个如同 Dockerfile 一样简单的 <code>Modelfile</code>：</p>
+  <pre><code>FROM ./qwen3_custom_gguf/unsloth.Q4_K_M.gguf
+
+# 设置系统人设（可选）
+SYSTEM "你是一名专业的智能助手。"
+
+# 设置推理参数
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9</code></pre>
+  <p>然后在命令行敲两行命令：</p>
+  <pre><code># 1. 注册模型镜像
+ollama create my-qwen3 -f Modelfile
+
+# 2. 随时随地与你自己微调出的模型对话！
+ollama run my-qwen3</code></pre>
+
+  <h2 id="ch9-cloud-engines">9.4 云端高并发双雄：vLLM（企业航母）与 SGLang（智能体新贵）</h2>
+  <p>当模型走出开发者的个人电脑、迈向对外开放的商业级生产服务时，单兵工具 Ollama / llama.cpp 就不再适用了。在面对每秒几十上百个并发请求时，如果你写一个 FastAPI 接口直接调用 Hugging Face 的 <code>model.generate()</code>，服务在第 5 个人接入时就会当场 OOM 崩溃！</p>
+  <p>要在云端 GPU 服务器上榨干算力、支撑高吞吐低延迟的商业 API，现代大模型工程界形成了两座巍峨的高峰：<strong>工业底盘事实标准 vLLM</strong>，以及<strong>专为复杂智能体而生的极速新贵 SGLang</strong>。它们与端侧的 <strong>llama.cpp</strong> 一同构成了现代大模型推理部署的「三足鼎立」格局。</p>
+
+  <h3>1. 为什么原生 PyTorch 无法胜任生产后端？深解 KV Cache 显存账本</h3>
+  <aside class="callout note">
+    <p class="co-label">读者捉虫存照：第 10 章根本没提过 KV Cache！它到底是个什么神仙？</p>
+    <p>读者抓得极准！在第 10 章中，我们计算的是<strong>训练态显存（权重 + 梯度 + 优化器 + 激活值）</strong>，当时压根就没有 KV Cache 这个角色！</p>
+    <p><strong>为什么训练时没有，推理时却成了头号显存杀手？</strong></p>
+    <ul>
+      <li><strong>训练时（并行一口吞）</strong>：模型是一整段整句读入，所有 Token 同时做矩阵乘法（Teacher Forcing 并行计算），根本不需要一个字一个字往外蹦，所以不需要缓存。</li>
+      <li><strong>推理时（自回归逐字接龙）</strong>：用户在聊天界面看着字一个个吐出来。模型先吐字 1，再拿（字1）去预测字 2；再拿（字1+字2）去预测字 3……<strong>这是一种「单向逐步自回归循环」！</strong></li>
+    </ul>
+  </aside>
+
+  <p>在 Transformer 的注意力机制（Self-Attention）中，每一个 Token 都会计算出三个向量：</p>
+  <ul>
+    <li><strong>Q（Query，查询）</strong>：“我想找什么相关的上下文？”</li>
+    <li><strong>K（Key，键/特征标签）</strong>：“我这个字是什么特征？”</li>
+    <li><strong>V（Value，值/真实内容）</strong>：“我这个字的真实语义是什么？”</li>
+  </ul>
+  <p>每次模型预测下一个词时，都会用当前词的 <code>Q</code> 去和前面所有历史词的 <code>K</code> 做点积配对（算注意力打分），最后把匹配度最高的所有历史词的 <code>V</code> 加权汇聚起来。</p>
+
+  <p><strong>关键问题来了：</strong>当你生成到第 100 个字时，前 99 个历史词的 <code>K</code> 和 <code>V</code> 发生过任何改变吗？</p>
+  <p><strong>分毫未变！因为前面 99 个字是已经说出口的既定事实！</strong></p>
+
+  <div class="tablewrap">
+    <table style="width: 100%; table-layout: fixed;">
+      <thead>
+        <tr>
+          <th style="width: 25%;">方案对比</th>
+          <th style="width: 45%;">计算过程</th>
+          <th style="width: 30%;">生成速度与代价</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>不加缓存<br>(无 KV Cache)</strong></td>
+          <td>
+            • 生成第 1 个字：算 1 次<br>
+            • 生成第 2 个字：把第 1、2 个字重算一遍<br>
+            • 生成第 100 个字：把前 1~100 个字<strong>从头到尾重算一遍</strong>！
+          </td>
+          <td>随着句子变长，计算量呈平方级暴增（1+2+...+N ≈ N²/2）。文本越长打字越慢，到最后像蜗牛爬！</td>
+        </tr>
+        <tr>
+          <td><strong>加上缓存<br>(有 KV Cache)</strong></td>
+          <td>
+            把历史所有词算过的 <code>K</code> 和 <code>V</code> <strong>常驻保存在显存的“草稿纸”上</strong>。生成第 100 个字时，仅需计算第 100 个字自己的 Q、K、V，然后直接查草稿纸匹配！
+          </td>
+          <td><strong>每一步计算量恒定为 1！</strong>无论前文有 100 字还是 2000 字，每个字的生成速度永远均匀如初！</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>用空间换时间，这张草稿纸（KV Cache）到底吃多少显存？数学公式极其简洁：</p>
+
+  <div class="formula-block">
+    单 Token 的 KV Cache 显存 = 2 (K与V) × 层数 × 隐藏维度 × 2 字节 (FP16)
+  </div>
+
+  <p>以一个标准的 <strong>7B 模型（32 层，隐藏维度 4096）</strong>为例：</p>
+  <ul>
+    <li>单个 Token 的草稿纸开销 = 2 × 32 × 4096 × 2 字节 = <strong>524,288 字节 ≈ 0.5 MB</strong>！</li>
+    <li><strong>1 位用户</strong>聊了 2048 个字：0.5 MB × 2048 ≈ <strong>1 GB 显存！</strong></li>
+    <li><strong>10 位用户</strong>同时并发提问：10 × 1 GB = <strong>10 GB 显存！</strong></li>
+    <li><strong>20 位用户</strong>并发：<strong>20 GB 显存！</strong></li>
+  </ul>
+
+  <p><strong>发现这个恐怖的现实了吗？</strong> 一个 4-bit 量化后的 7B 模型本体才占 <strong>4.8 GB</strong> 显存；但是 20 个并发用户的草稿纸（KV Cache），竟然要吃掉 <strong>20 GB</strong> 显存！<strong>草稿纸占的显存是模型本体的 4 倍还多！</strong></p>
+  <p>在原生 PyTorch 中，系统必须为每个请求提前在显存中申请一块<strong>连续物理空间</strong>。许多显存因为碎片化（Memory Fragmentation）根本拼不在一起，导致 5 个人连进来就当场 OOM 崩溃！这就逼出了伯克利团队的操作系统级降维打击——<strong>vLLM 与 PagedAttention</strong>。</p>
+
+  <h3>2. 工业老大哥：vLLM 的 PagedAttention 与连续批处理</h3>
+  <p>伯克利团队开发的 <strong>vLLM</strong>，彻底借鉴了计算机操作系统的<strong>虚拟内存分页机制（Virtual Memory Paging）</strong>：</p>
+
+  <figure class="figure">
+    <pre>
+【传统连续显存 vs vLLM PagedAttention 分页显存对比】
+
+ [传统 PyTorch: 连续物理显存分配]
+ 请求 A [■■■■□□□□□□□□] (预留 2048 长度，大量闲置碎片无法被别人使用)
+ 请求 B [■■■■■■■■□□□□] 
+ ➔ 显存碎片率高达 60% ~ 80%，并发只能开到 4~8 个！
+
+ [vLLM PagedAttention: 虚拟内存分页分配]
+ 物理显存被切分为大量固定大小的微小「内存页 (Pages)」(如每页 16 个 Token)
+ 请求 A ➔ 动态借用 [Page 1] ➔ [Page 7] ➔ [Page 12] (非连续物理地址)
+ 请求 B ➔ 动态借用 [Page 2] ➔ [Page 3]
+ ➔ 显存浪费率接近 0%！并发承载量直接暴涨 4 ~ 10 倍！
+    </pre>
+    <figcaption>图 9-1 · 操作系统级 PagedAttention 分页内存管理机制</figcaption>
+  </figure>
+
+  <aside class="callout note">
+    <p class="co-label">生活直觉 · 传统批处理（死板大巴车） vs 连续批处理（智能电梯）</p>
+    <ul>
+      <li><strong>传统批处理（死板大巴车）</strong>：
+        大巴车坐了 8 位乘客，其中乘客 A 去 1 楼买瓶水（只生成 5 个字），乘客 B 去 100 楼顶层开会（需要生成 1000 个字）。司机死规定：<strong>所有人必须等最慢的乘客 B 到了 100 楼，车门才能打开让大家一起下车！</strong> 乘客 A 早就办完事了却被绑在大巴里傻等，车上的座位也无法释放给路边排队的新人。
+      </li>
+      <li><strong>连续批处理（智能电梯，vLLM / SGLang 标配）</strong>：
+        电梯每升一层（每生成 1 个 Token），只要有人到了（乘客 A 吐出 EOS 结束），<strong>电梯门瞬间打开放他走人，空出来的座位瞬间让正在候梯厅等待的乘客 C 挤进来！</strong> 整个系统永远满载高速运转，吞吐量直接飙升 10~20 倍！
+      </li>
+    </ul>
+  </aside>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 9-3 · 单行命令拉起 vLLM 高并发推理服务</p>
+<pre># 在 Linux / GPU 服务器上，安装 vllm 后仅需单行命令：
+vllm serve ./qwen3_merged_16bit     --host 0.0.0.0     --port 8000     --max-model-len 2048     --gpu-memory-utilization 0.9
+
+# 自动提供高并发 OpenAI API 接口：
+# curl http://localhost:8000/v1/chat/completions ...</pre>
+  </div>
+
+  <h3>3. 智能体新贵：SGLang 的树状缓存（RadixAttention）与结构化加速</h3>
+  <aside class="callout note">
+    <p class="co-label">读者硬核反问：多 Subagent 并发协作，为什么单靠 vLLM 还不够？</p>
+    <p>想象一个典型的多智能体（Multi-Agent）系统：主控 Agent 派发了 4 个 Subagent 去协同分析一个复杂报表。这 4 个 Subagent 拥有完全相同的长达 2000 字的全局系统人设、背景规则和工具说明，随后各自发散去执行不同的子任务。</p>
+    <p><strong>传统的挑战</strong>：这就像一棵树从树干长出了 4 个树杈。如果采用朴素的缓存机制，不同 Agent 之间稍有差异就会导致整条缓存失效重算。而 <strong>SGLang</strong> 从一开始就是为了解决这种复杂的智能体逻辑调用而生的！</p>
+  </aside>
+
+  <p>由伯克利与 LMSYS 联合打造的 <strong>SGLang</strong>，在 vLLM 的物理显存分页基础上，做了两项直击现代 Agent 痛点的核心技术飞跃：</p>
+  <ul>
+    <li><strong>杀手锏一：RadixAttention（基数树注意力）</strong><br>
+      SGLang 把显存里的所有 KV Cache 组织成一棵<strong>动态前缀树（Radix Tree，类似 Git 的提交树）</strong>！无论多少个 Subagent 如何分叉跳转、回溯提问，只要前面的 Prompt 有一段是重合的，SGLang 就能在树上精准命中历史缓存！前缀命中率几乎达到 100%，多 Agent 场景下的首字延迟（TTFT）下降数倍，显存再省 50% 以上。
+    </li>
+    <li><strong>杀手锏二：编译级结构化输出加速（Compressed FSM）</strong><br>
+      在 Agent 编程中，后端往往要求大模型<strong>严格输出符合特定 TypeScript 接口的 JSON 格式</strong>（比如 <code>{"tool": "query_db", "args": {...}}</code>）。普通引擎在做严格 JSON 正则约束时，每吐一个字都要做复杂的校验，生成速度甚至会被拖慢一半。而 SGLang 内置了编译级压缩有限状态机（FSM），<strong>强约束大模型吐 JSON 时的速度是普通引擎的 3~5 倍</strong>！
+    </li>
+    <li><strong>前沿标杆</strong>：正因其在超长思维链（CoT）与深度逻辑交互上的极致吞吐，<strong>SGLang 成为了 DeepSeek 官方主推部署 DeepSeek-R1 的核心推理引擎之一！</strong></li>
+  </ul>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 9-4 · 单行命令拉起 SGLang 高并发 Agent 推理服务</p>
+<pre># 在 Linux / GPU 服务器上，安装 sglang 后启动多 Agent 优化后端：
+python3 -m sglang.launch_server     --model-path ./qwen3_merged_16bit     --host 0.0.0.0     --port 30000     --mem-fraction-static 0.85
+
+# 同样提供标准的 OpenAI API 接口，并原生支持极速 JSON 模式与树状前缀命中！</pre>
+  </div>
+
+  <h3>4. 工业三大推理引擎终极决策矩阵（三足鼎立）</h3>
+  <p>至此，现代大模型部署的「三足鼎立」完整版图彻底清晰。作为架构师，选型遵循以下黄金准则：</p>
+
+  <div class="tablewrap">
+    <table style="width: 100%; table-layout: fixed;">
+      <thead>
+        <tr>
+          <th style="width: 20%;">对比维度</th>
+          <th style="width: 26%;">llama.cpp / Ollama<br>【端侧单兵】</th>
+          <th style="width: 27%;">vLLM<br>【企业航母】</th>
+          <th style="width: 27%;">SGLang<br>【智能体新贵】</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>定位与载体</strong></td>
+          <td>个人桌面、边缘设备、Mac 离线。<br><strong>GGUF 单文件打包</strong>。</td>
+          <td>云端数据中心、通用 API 服务。<br><strong>AWQ / FP8 / BF16</strong>。</td>
+          <td>云端高并发 Agent、复杂推导平台。<br><strong>AWQ / FP8 / BF16</strong>。</td>
+        </tr>
+        <tr>
+          <td><strong>显存与缓存核心</strong></td>
+          <td>简单静态分配。<br>单人独占，无争抢碎片。</td>
+          <td><strong>PagedAttention</strong> 分页内存。<br>杜绝多用户并发显存碎片。</td>
+          <td><strong>RadixAttention</strong> 树状前缀路由。<br>多 Agent 树状共享前缀缓存。</td>
+        </tr>
+        <tr>
+          <td><strong>结构化 JSON 输出</strong></td>
+          <td>通过 GBNF 语法支持，速度普通。</td>
+          <td>通过外部库（如 Outlines）支持，有一定减速。</td>
+          <td><strong>原生编译级 FSM 加速</strong>，约束吐 JSON 时速度快 3~5 倍！</td>
+        </tr>
+        <tr>
+          <td><strong>硬件兼容性</strong></td>
+          <td>通吃 CPU、Apple Metal、N卡、A卡。零环境依赖。</td>
+          <td>全行业最广：NVIDIA、AMD ROCm、Intel Gaudi、国产昇腾等。</td>
+          <td>主要深耕 NVIDIA GPU 生态，迭代极其激进。</td>
+        </tr>
+        <tr>
+          <td><strong>黄金适用场景</strong></td>
+          <td>
+            • 个人 Mac / PC 随身助手<br>
+            • 离线私密单机环境<br>
+            • 打包模型分发给同事
+          </td>
+          <td>
+            • 企业通用内部知识库<br>
+            • 标准 SaaS 问答与客服系统<br>
+            • 异构算力集群混合部署
+          </td>
+          <td>
+            • <strong>多 Subagent 树状协同系统</strong><br>
+            • <strong>前端强依赖严格 JSON 接口</strong><br>
+            • <strong>DeepSeek-R1 超长思维链</strong>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="example">
+    <p class="ex-head">▶ 本章小试 · 在 Colab 验证 GGUF 导出函数（概念验证）</p>
+    <p>在进入下一章完整实战之前，你可以通过调用 <code>model.save_pretrained_gguf("test_gguf", tokenizer, quantization_method="q4_k_m")</code>，亲眼见证 Unsloth 如何在底层自动调用 llama.cpp 编译工具链生成 <code>.gguf</code> 二进制单文件。</p>
+  </div>
+
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li><strong>踏板终须焊死</strong>：生产部署必须通过 <code>merge_and_unload</code> 消除额外的 LoRA 低秩乘法计算延迟，产出标准独立架构。</li>
+      <li><strong>量化的物理红利</strong>：从 16-bit 浮点映射到 4-bit 离散标尺，显存和体积直砍 70%~75%，几乎无损保留推理智商。</li>
+      <li><strong>边缘交付 Ollama</strong>：用单个 <code>.gguf</code> 文件加一段 <code>Modelfile</code>，彻底摆脱 Python 与 CUDA 依赖，在 Mac/桌面 CPU 实现飞速纯离线推理。</li>
+      <li><strong>云端高并发 vLLM</strong>：采用 <strong>PagedAttention</strong> 彻底消灭显存碎片，借助<strong>连续批处理</strong>实现零等待插队，是商业 API 后端的唯一基石。</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>Merge 合并</dt><dd>将 LoRA 增量矩阵永久加回原模型权重矩阵的数学操作，产出完全独立的单一模型</dd>
+    <dt>Quantization 量化</dt><dd>将高精度浮点参数（如 FP16）映射压缩为低比特整数（如 INT4 / INT8）以大幅削减显存与带宽开销的优化技术</dd>
+    <dt>llama.cpp</dt><dd>由 Georgi Gerganov 开发的纯 C/C++ 无依赖大模型极速推理底层引擎，本地离线与 CPU/Mac Metal 推理生态的物理基石</dd>
+    <dt>Apple MLX</dt><dd>苹果官方机器学习研究团队为 Apple Silicon 统一内存量身打造的原生开源框架，支持在 Mac 上进行极致高效的本地推理与原生 LoRA 微调</dd>
+    <dt>GGUF 格式</dt><dd>llama.cpp 生态主推的二进制单文件大模型打包格式（犹如前端打包后的 bundle.js），将模型权重、架构超参和 Tokenizer 融为一体</dd>
+    <dt>q4_k_m</dt><dd>4-bit 混合精度中等尺寸量化规格（Q4=4位，_K=K-quants分块混合精度，_M=Medium中等尺寸），公认体积压缩与智商保留性价比最高档位</dd>
+    <dt>Ollama</dt><dd>基于 Go 和 C++ 编写的轻量级本地大模型运行框架，专为个人桌面与私有离线边缘交付设计</dd>
+    <dt>Modelfile</dt><dd>大模型领域的 Dockerfile，通过 FROM、SYSTEM、PARAMETER 声明模型来源与运行超参</dd>
+    <dt>KV Cache 键值缓存</dt><dd>保存前文所有 Token 注意力中间结果的动态显存缓存，避免自回归逐字生成时的重复计算</dd>
+    <dt>vLLM</dt><dd>伯克利开源的工业级高并发大模型推理后端引擎，以 PagedAttention 和连续批处理著称</dd>
+    <dt>SGLang</dt><dd>专为复杂多智能体协同、结构化 JSON 输出和超长思维链推理量身定制的高并发后端引擎，以 RadixAttention 树状缓存复用见长</dd>
+    <dt>PagedAttention 分页注意力</dt><dd>借鉴操作系统虚拟内存分页技术，将 KV Cache 存储在非连续显存块中以杜绝显存碎片的大并发调度算法</dd>
+    <dt>Continuous Batching 连续批处理</dt><dd>像智能电梯随时上下客一样在单个 Token 粒度动态调度进出，杜绝传统批处理队头拥堵的动态并发技术</dd>
+  </dl>
+</section>

@@ -1,0 +1,267 @@
+<section class="chapter" id="ch1" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 0 · 地基奠定：模型排练的底层循环</p>
+    <h1>第 1 章 · 训练的本质：一支乐队和一场排练</h1>
+    <p class="abstract">先不讲任何公式。用一支乐队把「训练」「微调」「模型」全部讲透，然后只需要记住一个四步循环——后面所有课都是它的变奏。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li>用乐队说清：编制（架构）和演奏习惯（参数）是什么、谁定的、训练在练哪个</li>
+      <li>说出 tensor 是什么，会创建、看 shape、做矩阵乘</li>
+      <li>说出算子是什么（运算种类），以及 GPT 只用了约 6 种</li>
+      <li>用自己的话说出 forward / loss / backward / update 四步各做什么</li>
+      <li>用三招手算简单函数的导数，并验证 autograd</li>
+      <li>区分「训练」与「推理」：模型里什么在变、什么不变</li>
+    </ul>
+  </aside>
+
+  <h2 id="ch1-band">1.0 开场：一支乐队</h2>
+  <p>一支乐队有两样东西。</p>
+  <p><strong>编制</strong>：几个人、什么乐器、怎么编曲——组建时定好，写在队规里，排练演出中<strong>永远不变</strong>。</p>
+  <p><strong>演奏习惯</strong>：键盘手触键的力度、贝斯手揉弦的方式、鼓手节奏的微妙偏移。这东西<strong>写不进谱子</strong>——是几万场演出里，每弹完一段就和目标版本对比、一点点磨出来的。</p>
+  <p><strong>大模型就是一支练成了的乐队</strong>：编制固定、人设计好；真正值钱的是演奏习惯——Qwen3 有 6 亿个「习惯」。<strong>微调</strong>＝乐队本来什么风格都能演，你想让它专攻<strong>巴洛克风格</strong>——风格有章法可循（装饰音、对位、和声走向），但<strong>没有人能把它写成公式</strong>：能写成规则的早写成乐理了，剩下「章法可总结、公式写不出」的部分，只能靠范例练。于是你挑一套巴洛克<strong>曲目集</strong>（训练数据＝曲目范例，不是乐器）让他们排练几百遍——每排一段就和大师版本对比差多少、微调习惯、重复。<strong>练成之后，观众点任何歌都带巴洛克的味道</strong>：变的是习惯（参数），不是乐器和编制。本章要讲的「训练」，就是「弹 → 对比 → 调习惯」这套排练循环。</p>
+
+  <h3>先分清两个最容易混的概念：点歌与排练（prompt 与 fine-tune）</h3>
+  <p>初学者最常混淆的一对，先立标杆再往下走：</p>
+  <div class="tablewrap"><table>
+    <caption>点歌（prompt）vs 排练（fine-tune）</caption>
+    <thead><tr><th></th><th>点歌 / 塞纸条（prompt）</th><th>排练（fine-tune）</th></tr></thead>
+    <tbody>
+      <tr><td>改变了什么</td><td><strong>什么都不改</strong>——只是给了输入和叮嘱</td><td><strong>乐队的习惯本身变了</strong>（参数被更新）</td></tr>
+      <tr><td>效果持续多久</td><td>只这一次，下次要重新叮嘱</td><td>长在身上，不用再提</td></tr>
+      <tr><td>成本</td><td>零成本，随口一句</td><td>要曲目集（数据）+ 排练时间（算力）</td></tr>
+      <tr><td>适合什么</td><td>临时要求、简单指令、一次性任务</td><td>稳定的风格、专业能力、格式习惯</td></tr>
+      <tr><td>因果角色</td><td>换输入：点不同的歌</td><td>换参数：同一首歌、不同编排处理</td></tr>
+    </tbody>
+  </table></div>
+  <p>用《我是歌手》检验：观众<strong>点不同的歌</strong>＝换输入＝prompt 行为；同一首歌<strong>换编曲混音</strong>＝换参数＝微调行为。两者可以叠加（既点歌又排练过），但机制完全不同。<strong>这本书学的是后者</strong>——怎么照曲目集排练、排练要花多少排练室空间、怎么知道练没练歪。</p>
+  <aside class="callout note">
+    <p class="co-label">本书比喻约定（全书通用）</p>
+    <p><strong>主类比＝乐队宇宙，贯穿全书</strong>。核心映射：编制＝架构（人定，不变）；演奏习惯＝参数（磨出来的）；训练数据＝曲目集（范例，不是乐器）；对比差距＝loss；习惯往哪边调＝梯度方向；一次调多少＝学习率；排练＝训练；演出＝推理（只弹不调）；观众点歌＝推理输入（prompt）；风格＝领域风格（巴洛克/爵士/某歌手的咬字——章法可总结、公式写不出，这正是需要训练的原因）；微调＝照曲目集排练，练成后点任何歌都带这个味道（同一首歌、不同编排处理＝同一输入、不同参数，听感完全不同）。后续概念的乐队位置：显存＝排练室只有 16 平米；LoRA＝效果器踏板（不动乐器本体，外挂改变音色，可拆可叠加）；量化＝母带压成 MP3（有损压缩）；过拟合＝只会在自家排练室状态好，换场子就懵；部署＝录成唱片任何音响可放；attention＝乐手边弹边听彼此。<strong>行业通用比喻</strong>（下山、账本等）作翻译层保留，首次出现与乐队对齐一次；仅当概念在乐队里找不到位置时才允许局部新比喻并显式声明。<strong>映射双标准：表面像 + 因果角色对齐</strong>（换乐器出别的声≠改习惯出别的味——前者是不动参数的行为）。<strong>使用密度三分法</strong>：抽象概念首次出现→比喻＋术语并提建立映射；之后的正式讨论→术语为主，比喻仅点缀回顾直觉；操作步骤/代码注释/数值场景→平实直说，不打哑谜。</p>
+  </aside>
+
+  <h2 id="ch1-tensor">1.1 预备：张量与算子（模型世界的音符与演奏法）</h2>
+  <p>先认两样东西，后面全书都用。<strong>张量（tensor）就是装数字的容器</strong>：一排数字、一张表格、一摞表格，都是张量。<strong>算子就是运算种类</strong>——加减乘除这些「动词」，只不过一次作用在几亿个数字上。</p>
+
+  <h3>张量：一段连续内存 + 三张身份证</h3>
+  <p>数学上张量是「多维数组」（一排、一张、一摞）；在显卡里它就是<strong>一段连续的内存，配三张身份证</strong>：`shape`（形状：怎么切这段内存）、`dtype`（类型：每个数占几字节）、`device`（位置：在内存还是显存）。<strong>shape 是「看数据的方式」而非数据本身</strong>——同一块内存换个形状，数字一个没动（通常连复制都不发生）。所以排障第一步永远是 `print(x.shape)`。</p>
+  <div class="tablewrap"><table>
+    <caption>维度阶梯（维度数 = 定位一个数需要几个下标）</caption>
+    <thead><tr><th>维度</th><th>名字</th><th>LLM 中的例子</th></tr></thead>
+    <tbody>
+      <tr><td>0 维</td><td>标量</td><td>loss 值（一个数）</td></tr>
+      <tr><td>1 维</td><td>向量</td><td>一个词的嵌入 [4096]；一层的偏置</td></tr>
+      <tr><td>2 维</td><td>矩阵</td><td>权重表；一批句子的表示 [batch, d]</td></tr>
+      <tr><td><strong>3 维</strong></td><td>—</td><td><strong>[batch, seq, d]：LLM 的日常形态</strong>（一批句子的逐词表示）</td></tr>
+      <tr><td>4 维</td><td>—</td><td>图像批次、卷积核（视觉模型主场）</td></tr>
+    </tbody>
+  </table></div>
+  <div class="example">
+    <p class="ex-head">例 1-0 · 创建张量的四个入口（+ 矩阵乘）</p>
+<pre>import torch
+
+torch.zeros(3, 3)                  # 分配+填 0
+torch.tensor([[1., 2.], [3., 4.]]) # 从数据造
+torch.arange(9).reshape(3, 3)     # 造序列再换视角（零复制）
+torch.empty(3, 3)                  # 只分配不初始化——最快，值是垃圾
+
+a = torch.tensor([[1., 2.], [3., 4.]])
+print(a.shape, a.dtype)   # torch.Size([2, 2]) torch.float32
+print(a @ a)              # @ 是矩阵乘：7 = 1×1 + 2×3 …
+# tensor([[ 7., 10.],
+#         [15., 22.]])</pre>
+  </div>
+  <p>逐元素运算（`+` `-` `*` 按位，标量会「广播」铺开）和矩阵乘 `@` 是<strong>两族不同的运算</strong>：`a * a` 按位乘得 `[[1,4],[9,16]]`，`a @ a` 行乘列求和。注意区别。</p>
+
+  <h3>算子：张量世界的加减乘除</h3>
+  <p>算子＝运算种类，和张量是<strong>动词和名词</strong>的关系：`y = a @ a` 里 `@` 是算子、`a` 是操作数；进去的是张量，出来的还是张量。你见过的算子分四族：</p>
+  <div class="tablewrap"><table>
+    <caption>算子四族</caption>
+    <thead><tr><th>族</th><th>例子</th><th>特点</th></tr></thead>
+    <tbody>
+      <tr><td>逐元素</td><td><code>a * a</code>、<code>a + 10</code></td><td>形状不变，按位算</td></tr>
+      <tr><td>归约</td><td><code>p.sum()</code></td><td>多变少，形状塌缩</td></tr>
+      <tr><td><strong>矩阵乘</strong></td><td><code>a @ a</code></td><td>形状变换，<strong>LLM 的大杀器</strong></td></tr>
+      <tr><td>形状操作</td><td><code>reshape</code></td><td>零计算，只换视角（算术里没有对应——「重新发牌」）</td></tr>
+    </tbody>
+  </table></div>
+  <p>两个反直觉的事实：① <strong>GPT 只用了约 6 种算子</strong>——加、乘、矩阵乘、归约、查表（embedding）、非线性（激活函数），堆几百层就成了；没有乘方没有对数。② 算术里「对两个数做一次乘法」和算子「对几亿个数按同一规则同时做」，<strong>种类相同、规模不同</strong>——这正是显卡几千个简单核心的战场（第 3 章 3.0 详讲）。</p>
+
+  <h3>六种算子逐个见面（含形状变化）</h3>
+  <p>「计算完成后成为什么样子」＝<strong>形状怎么变</strong>——这是读代码的关键眼力：</p>
+  <div class="tablewrap"><table>
+    <caption>表 1-0 · 六算子的形状变换与乐队位置</caption>
+    <thead><tr><th>#</th><th>算子</th><th>干什么</th><th>形状变化</th><th>乐队位置</th></tr></thead>
+    <tbody>
+      <tr><td>①</td><td>加法（逐元素）</td><td>对应位置相加</td><td>X → X 不变</td><td>音轨叠加（残差：原声轨+效果轨）</td></tr>
+      <tr><td>②</td><td>乘法（逐元素）</td><td>对应位置相乘</td><td>X → X 不变</td><td>调音台推子（×0=静音=mask）</td></tr>
+      <tr><td>③</td><td>矩阵乘 @</td><td>行点列求和</td><td>(m,n)@(n,k)→(m,k)</td><td>编曲变换门（Linear 层本体）</td></tr>
+      <tr><td>④</td><td>归约（sum/max）</td><td>多变少，塌缩</td><td>X → 更小/一个数</td><td>评委打总分（loss 就是归约）</td></tr>
+      <tr><td>⑤</td><td>查表（embedding）</td><td>按编号取一行</td><td>[编号]→[编号, d]</td><td>点歌编号→取整份总谱（=数组索引）</td></tr>
+      <tr><td>⑥</td><td>非线性（激活）</td><td>每个数过个弯</td><td>X → X 不变</td><td>压限器（负数归零等）</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>为什么必须有⑥</strong>——全书最反直觉的一条：只靠加和乘（线性运算），一万层叠起来数学上等价于一层（`W₃@W₂@W₁ = W合`），深度白堆；非线性"折"一下，层与层才不可合并——<strong>没有它，万层楼塌成一层楼</strong>。组合示范：`Linear 层 = ③矩阵乘 + ①加偏置 + ⑥非线性`，形状不变内容更新；`Attention = ⑤进入 + ③三次门 + ②推子打分 + ④归一化`。</p>
+  <div class="example">
+    <p class="ex-head">▶ 例 1-0 · 续 2 · 六算子一览（CPU 可跑）</p>
+<pre>import torch
+v = torch.tensor([1., 2., 3.])
+W = torch.tensor([[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]])  # 3→4 的门
+
+print(v + 10)          # ①加(广播) → [11,12,13]，形状不变
+print(v * torch.tensor([10., 100., 1000.]))  # ②乘推子 → [10,200,3000]
+print(v @ W)           # ③矩阵乘 → [1,2,3,0]：3维→4维
+print(v.sum(), v.max())# ④归约 → 6.0 和 3.0：塌成数
+table = torch.randn(100, 4096)               # ⑤查表：100 行的查找表
+print(table[53].shape)                       #   取一行 → torch.Size([4096])
+print(torch.relu(torch.tensor([-2., 3., -0.5])))  # ⑥非线性 → [0, 3, 0]</pre>
+  </div>
+
+  <h3>从算子到模型：人定编制，机器磨习惯</h3>
+  <p>「第一层用加、第二层用乘」这种规定，<strong>需要人定，但不是你</strong>，而且早已定完：算子先打包成标准积木（Linear 层＝一次矩阵乘＋加偏置；Attention 层＝几个矩阵乘＋查最大值），科学家把积木搭成固定编制发表（Transformer 架构，2017 年，全世界的模型都用它）。编制里的「习惯」——每个位置放什么数——<strong>没有任何人写过</strong>，全部由「弹→对比→调」的循环磨出来。你下载的模型文件，就是「定好的编制 + 磨好的 6 亿个习惯」的打包。所谓大牛「手写算子」，写的也不是新数学，而是<strong>让这些运算在芯片上跑得最快的实现</strong>（kernel）——好比把热路径函数换成 native binding。</p>
+
+  <h2 id="ch1-loop">1.2 训练：一个循环，四步</h2>
+  <figure class="figure">
+<pre>┌─────────────────────────────────────────────┐
+│  ① 前向 forward：拿一批数据，模型算出预测      │
+│  ② 损失 loss：一个数字，量化"预测错得有多离谱" │
+│  ③ 反向 backward：算出"每个参数该怎么动        │
+│     才能让 loss 变小"（梯度）                 │
+│  ④ 更新 update：参数 -= 学习率 × 梯度         │
+└─────────────── 重复几千次 ───────────────────┘</pre>
+    <figcaption>图 1-1 · 训练循环＝乐队的「弹→对比→调」，一切训练框架都是它的包装</figcaption>
+  </figure>
+  <p>对回乐队：①弹一遍（前向）→ ②和目标版本对比差多少（损失）→ ③回想哪些演奏习惯导致了差距（反向）→ ④微调那几处习惯（更新）。重复几万场，乐队就练成了。</p>
+
+  <h2 id="ch1-forward">1.3 前向：模型就是巨型函数</h2>
+  <p>模型是 <code>f(输入, 参数) → 预测</code>。「参数」就是那几亿个习惯值；所谓模型输出，就是把输入沿着固定编制一路乘加变换到输出。张量是这门变换的语言。</p>
+
+  <h2 id="ch1-loss">1.4 损失：把「错」压成一个数字</h2>
+  <p>训练需要一个数字衡量「错多少」。语言模型常用交叉熵（cross-entropy），直觉：<strong>模型给正确答案的概率越高，loss 越低；自信地答错，惩罚最狠</strong>。训练的全部目标＝让这个数字变小——乐队里就是「这一版和目标差多远」。</p>
+
+  <h2 id="ch1-backward">1.5 反向：链式法则的自动化（含手算三招）</h2>
+  <p><code>loss.backward()</code> 不神秘——它是<strong>链式法则的自动化</strong>：loss 是每个参数的函数，对每个参数求「导数」（该参数动一点，loss 动几倍），就得到每个习惯的调整方向。PyTorch 的 autograd 记录前向每一步运算（节点＝算子、边＝张量，即「计算图」），反向时沿图倒着算。</p>
+  <p>「求导」本身怎么算？一维函数 y(x) 的导数记 <code>dy/dx</code>。手算只需<strong>三招</strong>，本书全程够用：</p>
+  <div class="tablewrap"><table>
+    <caption>表 1-1 · 求导三招</caption>
+    <thead><tr><th>招</th><th>规则</th><th>例</th></tr></thead>
+    <tbody>
+      <tr><td>① 幂法则</td><td>xⁿ → n·xⁿ⁻¹（指数掉下来当系数，指数减一）</td><td>x³ → 3x²；x → 1</td></tr>
+      <tr><td>② 常数倍</td><td>系数照抄</td><td>3x² → 6x；5x → 5</td></tr>
+      <tr><td>③ 逐项相加</td><td>各项分别求导再相加；常数导数为 0</td><td>x⁴ + 2x² → 4x³ + 4x</td></tr>
+    </tbody>
+  </table></div>
+  <p>直觉检验幂法则：取 x=2，<code>(2.1² − 2²) / 0.1 = 4.1</code>，非常接近 2x = 4——步长越小越贴合，这就是「瞬时变化率」。多参数时的<strong>梯度</strong>＝每个参数各自导数拼成的向量。</p>
+  <div class="example">
+    <p class="ex-head">例 1-1 · 手算一个梯度，验证 autograd</p>
+<pre>import torch
+
+x = torch.tensor(2.0, requires_grad=True)
+y = x**3 + 2*x
+y.backward()
+print(x.grad)   # ？？（先手算，再运行验证）</pre>
+  </div>
+  <p>手算：三招拆 <code>y = x³ + 2x</code> → <code>3x² + 2</code>；代入 x=2 → <strong>3×4+2 = 14</strong>。autograd 对几亿个参数同时做的就是这件事。</p>
+
+  <h2 id="ch1-update">1.6 更新：学习率与下山</h2>
+  <p>最朴素的更新法则（SGD，随机梯度下降）：`参数 = 参数 − lr × 梯度`。</p>
+  <p><strong>为什么是减号</strong>：梯度指向 loss <em>上升最快</em>的方向，而训练要的是下降，所以必须逆着走。类比浓雾下山：看不见谷底，但脚能感到坡向（梯度），每步朝坡的<strong>反方向</strong>挪一小步，海拔逐步下降直到谷底——这套直觉就叫<strong>梯度下降</strong>；乐队版就是<strong>调音</strong>：音偏高了一点（loss），就往低的方向拧旋钮，一步步逼近准点。（下山是行业通用意象，属翻译层；主类比始终是乐队。）</p>
+  <p>「随机」是什么意思？它的反面是「批量梯度下降」：每更新一次先把<strong>整个数据集</strong>算一遍取平均——方向准但一步贵得离谱。SGD 每次只拿<strong>一小批</strong>（batch，供弹系统 DataLoader 切出来的）就算就更新——方向带噪声，但便宜上千倍，抖着抖着也能到谷底。你以后用的 AdamW 是它的进化版（加动量＋自适应步长）。</p>
+  <aside class="callout warning">
+    <p class="co-label">警告</p>
+    <p>lr（学习率）是步长：太小收敛龟速；太大在谷底两侧来回震荡甚至发散（loss 变 NaN 的头号人犯）。调参功夫的一半在这个数字上。</p>
+  </aside>
+
+  <h2 id="ch1-finetune">1.7 微调与推理：照你的曲目集排练</h2>
+  <p><strong>微调＝排练循环跑在别人练成的乐队上</strong>。多年巡演给了通用音乐能力（什么风格都能演），微调只负责掰向你的曲风。训练时<strong>参数在变</strong>（每次对比后微调演奏习惯），<strong>架构不变</strong>（编制和乐器一个不动），曲目集躺着不动——变的只有习惯。</p>
+  <p>常见误区澄清：微调<strong>不是</strong>「习惯不变、只是换了曲目所以听着不同」——那叫换输入（点别的歌），是不动参数的行为；微调恰恰是习惯本身在变。综艺《我是歌手》是完美对照：<strong>同一首歌，编曲混音方式不同，听感完全不同</strong>——同一输入、不同参数、不同产出，这就是微调的因果结构。</p>
+  <p><strong>为什么微调，而不只靠提示词？</strong>塞纸条叮嘱「弹巴洛克点」（prompt）＝每场都要提醒，乐手只是「尽量装」；照曲目集排练几百遍（微调）＝风格长在手上，不用提醒。第 3 章数据工程会正式回到这个对比。</p>
+  <p><strong>推理＝只有①前向，没有②③④</strong>——正式演出：只弹，不对比、不调整。所以演出比排练省显存得多（第 2 章算这笔账：排练时每人还要带调音笔记本和习惯记录，设备占用是演出的 4 倍）。</p>
+  <p>微调的省钱变体预告（第 2 章展开）：LoRA——<strong>效果器踏板</strong>：乐器本体（6 亿个习惯）全部冻结，外挂一块踏板只练旋钮（几百万个），数学上叫低秩增量 <code>ΔW=BA</code>：两个「瘦长条」矩阵相乘凑出一个「大方阵」，原来 7B 个数要更新，现在只训几百万个（4096×4096 ≈ 1670 万 → 4096×8 + 8×4096 = 6.5 万，约 1/256）。</p>
+
+  <div class="exercise">
+    <p class="ex-head">练习 1-A · tensor 运算（照着例 1-0 改）</p>
+    <ol>
+      <li>照例 1-0 的写法，创建 3×3 的 float32 tensor <code>a</code>，值为 1–9（第一行 1,2,3……），算出 <code>a @ a</code>，把结果抄下来。</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生答案（2026-09-25）：</strong><code>a @ a = [[30,36,42],[66,<s>71</s>,96],[102,126,150]]</code></p>
+    <p><strong>批改：</strong>9 格对 8 格，仅 (2,2) 手算滑了一格：4×2 + 5×5 + 6×8 = 8+25+48 = <strong>81</strong>（误写 71）。这正是「先手算、再跑代码验证」流程的价值——<code>print(a @ a)</code> 一秒指出这一格。</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 1-B · autograd（照着例 1-1 换个函数）</p>
+    <ol>
+      <li>把例 1-1 的函数换成 <code>y = x² + 5x</code>，先手算 x=3 处的梯度，再用 3 行代码验证。</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生答案（2026-09-25）：</strong>dy/dx = 2x + 5，x=3 处梯度 = <strong>11</strong>（幂法则 + 常数倍运用正确）</p>
+    <p><strong>批改：</strong>手算满分；但验证代码里 <code>x = torch.tensor(2.0, ...)</code> 误写 2.0——跑出来是 2×2+5 = <strong>9</strong>，与手算 11 对不上。<strong>验证的意义在于对照数字</strong>：跑完不比手算值，等于没验证。改为 3.0 重跑应得 11。（学生当日已改 3.0 重跑，验证通过 ✓）</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 1-C · DataLoader（循环的供弹系统）</p>
+    <ol>
+      <li>每 batch 32 条、共 1000 条数据、1 个 epoch——<code>for batch in loader</code> 循环几次？<code>drop_last=True</code> 时呢？<strong>提示：整除与余数分开算。</strong></li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生答案（2026-09-25）：</strong>1000/32 = 31.25 → 32 次；drop_last=True → 31 次 ✓</p>
+    <p><strong>批改：</strong>全对。画面感：32 批 = 31 个满批（31×32=992）+ 1 个只有 8 条的尾巴批；drop_last=True 丢弃尾巴换批次整齐——小数据被牺牲。</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 1-D · 概念（全局检查）</p>
+    <ol>
+      <li>（口语题）你理解的「训练」和「推理」的区别是什么？微调时模型里什么在变、什么不变？</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生答案（2026-09-25）：</strong>训练=给足够多数据看到规律；推理=用学到的知识解决问题；微调=参数不变、路径优化（像解题找简便方法）。</p>
+    <p><strong>批改：</strong>推理 ✓；训练抓到「数据中找规律」但缺机制（四步循环：loss 量化错→梯度指方向→参数被更新）；<strong>微调有概念偏差</strong>——被训练的参数一直在变，不变的是架构；「找简便解法」更接近提示词/推理策略。</p>
+    <p><strong>复述记录：</strong>首答「变的是数据，不变的是逻辑」——纠正：数据是输入，躺着一动不动；变的是<strong>参数</strong>。次日填空复述「参数在变，数据和架构不变」✓ 通过，模块 0 收官。</p></details>
+  </div>
+
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li>乐队模型：架构=编制（人定，不变），参数=演奏习惯（磨出来的）；微调=照你的曲目集排练，练成后点任何歌都带你的味道</li>
+      <li>张量=装数字的容器（连续内存+shape/dtype/device 三张身份证）；算子=运算种类（GPT 只用约 6 种）</li>
+      <li>训练=前向→损失→反向→更新四步循环；autograd=链式法则自动化；求导三招够用全书</li>
+      <li>学习率是步长（下山类比）；SGD=每批更新一次</li>
+      <li>微调时参数在变、架构与数据不变；推理=只有前向</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>架构 architecture</dt><dd>乐队的编制：运算怎么组织（人设计，训练中不变）</dd>
+    <dt>参数 parameter</dt><dd>乐手的演奏习惯：每个位置的数值（没人手写，训练学出）</dd>
+    <dt>张量 tensor</dt><dd>多维数组 + GPU 并行 + 自动求导记账；shape 与 dtype 是第一属性</dd>
+    <dt>广播 broadcasting</dt><dd>形状不同的张量按规则自动扩展后运算（如标量加矩阵）</dd>
+    <dt>矩阵乘 matmul（@）</dt><dd>行与列对应相乘再求和；与按位乘 * 是两族运算</dd>
+    <dt>算子 operator（op）</dt><dd>对张量的一次计算，背后是 GPU 核函数；计算图的节点</dd>
+    <dt>kernel 核函数</dt><dd>算子在芯片上的具体实现；大牛手写的就是这个（tiling/融合/分工）</dd>
+    <dt>前向传播 forward</dt><dd>用当前参数把输入变换为预测输出</dd>
+    <dt>损失函数 loss</dt><dd>把「预测错得有多离谱」压成一个数字（和目标版本对比差距）</dd>
+    <dt>反向传播 backward</dt><dd>沿计算图反向应用链式法则，求 loss 对每个参数的导数</dd>
+    <dt>梯度 gradient</dt><dd>每个参数的「下山方向」；多参数时各自导数拼成向量</dd>
+    <dt>导数 / 幂法则</dt><dd>x 动一点 y 动几倍；xⁿ → n·xⁿ⁻¹（三招之首）</dd>
+    <dt>学习率 lr / SGD</dt><dd>步长 / 随机梯度下降（每小批更新一次的朴素法则）</dd>
+    <dt>微调 / 推理</dt><dd>照曲目集排出新风格 / 正式演出只弹不调</dd>
+  </dl>
+
+  <section class="qa-log">
+    <h2>读者问答辑录（学习史存档）</h2>
+    <p>以下是 2026-09-25 学习过程中的真实问答，正文已吸收其养分，此处留档：</p>
+    <dl>
+      <dt>Unsloth 是什么？是 LoRA 的底层框架吗？</dt><dd>都不是——专有名词：unsloth.ai 的微调加速库。分层：LoRA=数学方法，Hugging Face PEFT=官方实现，Unsloth=压在实现之下的加速引擎（手写 Triton kernel，API 不变约 2 倍速）。查字典对不上的「英文词」先怀疑是品牌名。</dd>
+      <dt>什么是 SGD？</dt><dd>随机梯度下降——1.6 节已并入正文（批量 vs 小批、差评类比）。</dd>
+      <dt>ΔW=BA 是什么？</dt><dd>LoRA 记号，1.7 节已并入正文（1670 万 → 6.5 万的算术）。</dd>
+      <dt>例题直接给出导数，可求导没教过？</dt><dd>初版教学事故（前置缺位），已补表 1-1 三招——「逐公式、逐代码行列前置链条」由此列为改稿检查项。</dd>
+      <dt>微调是「参数不变、路径变聪明」？</dt><dd>误区，1.7 节已并入正文修正。</dd>
+      <dt>算子就像算术里的加减乘除？</dt><dd>方向全对——种类相同、规模不同（对几亿个数同时做）；GPT 只用约 6 种算子。</dd>
+      <dt>每层的运算要我手动规定吗？</dt><dd>不用——人定编制（架构）早已完成；你拿成品磨习惯。</dd>
+      <dt>权重①能砍吗？</dt><dd>能——量化就是砍①（QLoRA=LoRA+量化），详见第 2 章。</dd>
+    </dl>
+  </section>
+</section>

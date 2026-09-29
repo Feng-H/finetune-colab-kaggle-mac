@@ -1,0 +1,524 @@
+<section class="chapter" id="ch7" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 3 · 模型心智：Prompt 宪法与数据工程</p>
+    <h1>第 7 章 · 工业级数据工程：清洗、套版与 Loss Masking</h1>
+    <p class="abstract">模型只是装载能力的容器，数据才是灵魂与天花板。本章抛弃东拼西凑的玩具代码，建立一条完整工业级「数据传送带」：从带噪多轮 JSON、经过四步净化、编译为专属 ChatML、实施考题遮罩（Loss Masking），最后分配考卷与训练监控。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li><strong>全景视野</strong>：看清一条数据从「互联网脏文本」到「GPU 浮点张量」的 5 阶段演变全貌</li>
+      <li><strong>格式演进与套版</strong>：理解为什么单轮 Alpaca 无法胜任真实业务，掌握 ShareGPT / Messages 规范及 Chat Template（Word/PPT 模版套版机制）</li>
+      <li><strong>防翻车清洗流水线</strong>：亲手解决「断头截断事故」、「幽灵特殊 Token 注入」和「GIGO 模板残留」</li>
+      <li><strong>核心机制 Loss Masking</strong>：搞懂「驾校考车技不考背口令」的底层原理，学会使用 PyTorch 的 <code>-100</code> 标签只对模型回答求导</li>
+      <li><strong>科学切分与监控</strong>：划分 Train/Val 考卷，在训练日志中实时揪出「死记硬背（过拟合）」</li>
+    </ul>
+  </aside>
+
+  <!-- 全景传送带图 -->
+  <figure class="figure">
+    <pre>
+【数据工程全景传送带：一条数据在送入 GPU 之前的 5 阶段蜕变】
+
+ [阶段 1: 原始采集]              [阶段 2: 净化手术]               [阶段 3: 格式套版]
+ 原始业务 JSON                   四步清洗流水线                   Jinja 模板渲染
+ ---------------------          ---------------------           ---------------------
+ • 多轮对话数组                  • 剔除断头截断 (过长)            • 注入角色定界符:
+ • 混杂机器抓取乱码              • 剔除无意义短语 (过短)            &lt;|im_start|&gt;user...
+ • 残留 {TODO} 变量              • 正则过滤脏占位符               &lt;|im_end|&gt;
+ • 重复数据                      • MD5 指纹去重                   (转为线性纯文本)
+         │                               │                               │
+         └───────────────────────────────┼───────────────────────────────┘
+                                         ▼
+                 [阶段 4: Token 编码与答案遮罩]          [阶段 5: 考卷划分与入炉]
+                 Tokenizer + Loss Masking               Train / Val 切分
+                 ------------------------------         ------------------------------
+                 • 文本序列 ➔ 数字 ID 序列              • 80% 训练集 (送入 GPU 调整权重)
+                 • 考题部分标签设为: -100 (不扣分)       • 20% 验证集 (独立试卷，照出过拟合)
+                 • 答案部分保留真实 Token ID (算损失)
+    </pre>
+    <figcaption>图 6-0 · 工业级数据工程流水线全景传送带</figcaption>
+  </figure>
+
+  <h2 id="ch6-lifecycle">6.1 一条数据的生命周期：从脏 JSON 到张量</h2>
+  <p>在第 7 章中，我们为了快速看到模型开口说“叮！”，走了一条极简的野路子：在 Python 里用反引号字符串拼接，把问题和答案一股脑塞给模型。这在教学初体验时很爽，但在真实项目中，这种做法会引发灾难：</p>
+  <ol>
+    <li>只要真实用户追问第二句话，你的模型就会当场“失忆”，因为它从没学过怎么处理多轮上下文。</li>
+    <li>模型会花费将近一半的参数容量去死记硬背人类提出的问题，导致真正需要生成的回答磕磕绊绊。</li>
+  </ol>
+  <p>工业级数据工程的核心，就是建立一条<strong>确定性的清洗与编译流水线</strong>。接下来，我们将用一条真实世界的客服会话数据作为案例，全程追踪它在这条流水线上的每一步蜕变。</p>
+
+  <h2 id="ch6-formats">6.2 规范与套版：Alpaca 到 Messages，再到 ChatML</h2>
+
+  <h3>1. 格式对比：为什么扁平 Alpaca 必被淘汰？</h3>
+  <aside class="callout note">
+    <p class="co-label">ELI5 · Alpaca 到底是什么？</p>
+    <p><strong>Alpaca（羊驼）是 2023 年斯坦福大学做的一个轰动开源圈的微调项目。</strong> 当时学者们用 GPT-3.5 自动生成了 5.2 万条极简单轮问答数据微调 LLaMA 模型。因为太火，大家后来就把这种 <code>instruction</code>（指令）+ <code>input</code>（输入）+ <code>output</code>（输出）的三字段 JSON 统称为 <strong>Alpaca 格式</strong>。但它的设计初衷是一问一答，<strong>天然无法记录历史追问</strong>。</p>
+  </aside>
+
+  <p>工业生产中，统一采用 <strong>ShareGPT / OpenAI Messages</strong> 规范。它用消息对象数组模拟人类真实的交谈流：</p>
+
+  <div class="example">
+    <p class="ex-head">▶ 阶段 1 原料 · 真实业务场景的多轮数据样例</p>
+<pre>raw_record = {
+  "session_id": "conv_9527",
+  "messages": [
+    {"role": "system", "content": "你是一名专业的智能客服助手。"},
+    {"role": "user", "content": "你好，我刚买的耳机左耳没有声音。"},
+    {"role": "assistant", "content": "您好！请先尝试长按耳机仓后方按钮 10 秒重置配对，通常能解决此问题。"},
+    {"role": "user", "content": "还是不行，指示灯一直闪红灯。"},
+    {"role": "assistant", "content": "红灯闪烁代表电池可能存在异常，请提供您的订单号，我为您申请换新处理。"}
+  ]
+}</pre>
+  </div>
+
+  <h3>2. Chat Template：不就是套 Word / PPT 模板吗？</h3>
+  <aside class="callout note">
+    <p class="co-label">读者一句话通透本质：不就是套模板吗？</p>
+    <p><strong>没错！本质就跟 PPT 模板、Word 合同模板一模一样！</strong></p>
+    <ul>
+      <li><strong>你的数据</strong>：具体的对话干货内容（角色 + 发言文本）。</li>
+      <li><strong>模型的 Chat Template</strong>：厂家提前设计好的版式排版规则（比如 Qwen 规定用 <code>&lt;|im_start|&gt;</code> 和 <code>&lt;|im_end|&gt;</code> 区分角色）。</li>
+      <li><strong>Jinja 是什么？</strong>：Jinja 只是 Python 里<strong>帮你自动把数据往模板空位里填的工具人</strong>（就如同 Word 里的“邮件合并”，自动批量把姓名塞进聘书横线里）。</li>
+    </ul>
+  </aside>
+
+  <div class="example">
+    <p class="ex-head">▶ 阶段 3 套版 · 使用 apply_chat_template 将多轮数组编译为带暗号文本</p>
+<pre>from unsloth import FastLanguageModel
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+    max_seq_length = 2048,
+    load_in_4bit = True,
+)
+
+# 告诉 Tokenizer 按照 Qwen 官方的 Jinja 模板套版
+formatted_text = tokenizer.apply_chat_template(
+    raw_record["messages"],
+    tokenize = False,            # 先不转成数字 ID，先看纯文本字符串
+    add_generation_prompt = False # 训练模式：不要在末尾追加空白的 assistant 提示符
+)
+
+print(formatted_text)</pre>
+  </div>
+
+  <p>套版后打印出的真实结果：</p>
+<pre>&lt;|im_start|&gt;system
+你是一名专业的智能客服助手。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+你好，我刚买的耳机左耳没有声音。&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+您好！请先尝试长按耳机仓后方按钮 10 秒重置配对，通常能解决此问题。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+还是不行，指示灯一直闪红灯。&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+红灯闪烁代表电池可能存在异常，请提供您的订单号，我为您申请换新处理。&lt;|im_end|&gt;</pre>
+
+  <p><strong>注意观察边界暗号</strong>：</p>
+  <ul>
+    <li>每一句话的头部都被套上了 <code>&lt;|im_start|&gt;角色名\n</code>。</li>
+    <li>每一句话的尾部都被套上了 <code>&lt;|im_end|&gt;\n</code>。上一章我们学到的曲终记号 <strong>EOS（End Of Sequence）</strong>，在 Qwen 中就是这个 <code>&lt;|im_end|&gt;</code>！</li>
+  </ul>
+
+  <h2 id="ch6-cleaning">6.3 净化手术：真实工业界的防翻车清洗流水线</h2>
+  <p>很多人以为清洗数据就是删掉空行，但在微调大模型时，有三大“隐形炸弹”必须逐一拆除：</p>
+
+  <h3>炸弹 1：断头截断事故（Truncation Disaster）</h3>
+  <p>如果你有一条长达 3000 字的详细售后记录，而你的模型 <code>max_seq_length</code> 设为了 1024。直接截断的后果是什么？</p>
+  <p><strong>在第 1024 个字的位置，回答被一刀切断，最后的 <code>&lt;|im_end|&gt;</code> 丢失了！</strong></p>
+  <p>如果训练集里充斥着这种断头数据，模型会学会一个可怕的习惯：<strong>话说到一半突然闭嘴，永远不发结束符</strong>（因为在它的训练样本里，很多句子末尾根本就没有 EOS）。</p>
+  <p><strong>处方</strong>：在送入训练前，统计 Token 长度，超长的整条剔除，或者按多轮轮次安全截断，<strong>绝不在 assistant 回答正中间一刀切！</strong></p>
+
+  <h3>炸弹 2：占位符与模板残留（GIGO）</h3>
+  <p>在第 7 章我们吃过大亏：训练集里留下了 <code>{instruction}</code> 和 <code>{input}</code>，模型 Loss 猛掉，结果学会了吐乱码。爬虫数据中常见的 <code>TODO</code>、<code>404 Not Found</code>、<code>[图片]</code>、<code>undefined</code> 都会污染模型。</p>
+
+  <h3>炸弹 3：幽灵特殊 Token 注入</h3>
+  <p>如果抓取的用户评论中，正好有人打字写了一句 <code>"请看文档里的 &lt;|im_end|&gt; 标签"</code>。如果在套版时不加防范，Tokenizer 会误认为对话在这里提前终止了！</p>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 6-2 · 工业级四步净化流水线实现</p>
+<pre>import re
+import hashlib
+
+def clean_messages_pipeline(messages, tokenizer, max_limit=1024):
+    """
+    四步净化手术：
+    1. 结构与非空检查
+    2. 占位符与脏数据正则过滤
+    3. Token 级别长度安全检测（杜绝断头）
+    4. 返回清洗结果与指纹
+    """
+    if not messages or len(messages) < 2:
+        return None, "对话轮次过少"
+
+    # 规则 1：必须以 user 开头（可带 system），必须以 assistant 结尾
+    if messages[-1]["role"] != "assistant":
+        return None, "最后一句不是模型回答"
+
+    # 规则 2：正则拦截脏占位符
+    dirty_patterns = [r"\{.*?\}", r"TODO", r"N/A", r"undefined", r"404 Not Found", r"\[图片\]"]
+    for msg in messages:
+        text = msg.get("content", "").strip()
+        if not text:
+            return None, "存在空白发言"
+        for pat in dirty_patterns:
+            if re.search(pat, text, re.IGNORECASE):
+                return None, f"命中脏模式: {pat}"
+
+    # 规则 3：安全长度检查（杜绝断头截断）
+    # 模拟套版并测试 Token 长度
+    formatted = tokenizer.apply_chat_template(messages, tokenize=False)
+    tokens = tokenizer(formatted)["input_ids"]
+    if len(tokens) > max_limit:
+        return None, f"长度超标 ({len(tokens)} > {max_limit})，整条舍弃防止断头"
+
+    # 规则 4：生成内容指纹（用于去重）
+    fingerprint = hashlib.md5(formatted.encode("utf-8")).hexdigest()
+
+    return messages, fingerprint
+
+# 实测运行清洗
+valid_msg, info = clean_messages_pipeline(raw_record["messages"], tokenizer)
+print(f"清洗结果: {'通过' if valid_msg else '剔除'}, 详情: {info}")</pre>
+  </div>
+
+  <h2 id="ch6-masking">6.4 训练盲区破解：只对答案算 Loss（Loss Masking）</h2>
+
+  <aside class="callout note">
+    <p class="co-label">从生活直觉切入：驾校练倒车入库，考官会考核教练口令吗？</p>
+    <p>想象你在驾校学车：</p>
+    <ul>
+      <li><strong>教练喊口令（用户提问）</strong>：“挂倒档，往右打死！”</li>
+      <li><strong>你的操作（模型回答）</strong>：你踩离合、打方向盘、把车倒进库里。</li>
+    </ul>
+    <p>最后考官给你打分（算 Loss/算差距）的时候，<strong>只会看你的车停得正不正</strong>。考官绝对不可能给你打分说：“学员背诵教练口令不够熟练，扣 20 分！”——因为你是开车的，你这辈子上路都不需要自己喊教练口令！</p>
+  </aside>
+
+  <p>在第 7 章中，底座模型从左往右挨个字预测，花费了宝贵的 GPU 算力去背诵用户的问题。工业微调必须实施 <strong>Loss Masking（答案遮罩）</strong>：给模型戴上一副防作弊眼镜，考题部分即使猜错了也<strong>不扣分、不求导</strong>！</p>
+
+  <figure class="figure">
+    <pre>
+【全文计算 Loss（未 Mask，错误做法）】
+文本：  [&lt;|im_start|&gt;user  耳机没声音&lt;|im_end|&gt;  &lt;|im_start|&gt;assistant  请长按重置&lt;|im_end|&gt;]
+目标：  [      ↓↓              ↓↓                       ↓↓                 ↓↓        ]
+求导：  (强制背题扣分)    (强制背题扣分)             (正常计算误差)       (正常计算误差)
+
+【只对答案计算 Loss（Response-only Masking，工业标准）】
+文本：  [&lt;|im_start|&gt;user  耳机没声音&lt;|im_end|&gt;  &lt;|im_start|&gt;assistant  请长按重置&lt;|im_end|&gt;]
+标签：  [     -100            -100                      ↓↓                 ↓↓        ]
+求导：  (直接忽略不计)    (直接忽略不计)             (梯度回传更新)       (梯度回传更新)
+    </pre>
+    <figcaption>图 6-1 · 全文 Loss 与 Response-only Loss Masking 机制对比</figcaption>
+  </figure>
+
+  <h3>底层原理：PyTorch 的 -100 魔法</h3>
+  <p>在深度学习底层计算交叉熵损失（CrossEntropyLoss）时，有一个全行业通行的铁律：<strong>凡是目标标签等于 <code>-100</code> 的位置，底层 CUDA 算子直接跳过，既不计入 Loss，也不回传梯度！</strong></p>
+  <p>利用这个机制，我们只需要把 <code>user</code> 和 <code>system</code> 部分的 Token 标签全部刷成 <code>-100</code>，只留下 <code>assistant</code> 说的内容保持原数字 ID，模型的所有精力就 100% 聚焦在回答上了。</p>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 6-3 · 在 Unsloth 中一键开启答案遮罩</p>
+<pre>from unsloth import train_on_responses_only
+
+# 在构建完 trainer 之后，只需一行代码注入遮罩逻辑：
+trainer = train_on_responses_only(
+    trainer,
+    instruction_part = "&lt;|im_start|&gt;user\n",
+    response_part = "&lt;|im_start|&gt;assistant\n",
+)
+# 这样从 user 开始到 assistant 出现之前的所有字符，
+# 都会在底层被打上 -100 标签，考题彻底免检！</pre>
+  </div>
+
+  <h2 id="ch6-split">6.5 考卷分配：Train / Val 切分与过拟合监控</h2>
+  <p>流水线的最后一环是分配考卷：绝对不能把手头的所有数据都拿去训练！</p>
+  <p>必须保留 10% ~ 20% 的数据作为<strong>验证集（Validation Set）</strong>——这是模型在训练期间<strong>绝对不能偷看</strong>的考卷。</p>
+
+  <div class="example">
+    <p class="ex-head">▶ 例 6-4 · 划分考卷并配置周期性考试</p>
+<pre>from datasets import Dataset
+from transformers import TrainingArguments
+
+# 假设 clean_list 是我们经过清洗流水线留存的合格数据列表
+dataset = Dataset.from_list(clean_list)
+
+# 1. 80/20 比例切分（固定随机种子 42 保证结果可复现）
+split_data = dataset.train_test_split(test_size=0.2, seed=42)
+train_dataset = split_data["train"]
+eval_dataset  = split_data["test"]
+
+print(f"训练集（练习题）: {len(train_dataset)} 条")
+print(f"验证集（模拟考）: {len(eval_dataset)} 条")
+
+# 2. 在训练参数中开启评估
+training_args = TrainingArguments(
+    output_dir = "outputs_monitored",
+    per_device_train_batch_size = 8,
+    per_device_eval_batch_size  = 8,
+    num_train_epochs = 3,
+    learning_rate = 2e-4,
+    evaluation_strategy = "steps",   # 每隔固定步数考一次模型
+    eval_steps = 20,                 # 每 20 步考一次试
+    logging_steps = 10,
+    save_strategy = "no",
+    report_to = "none"
+)</pre>
+  </div>
+
+  <h3>如何看懂评估成绩单？</h3>
+  <ul>
+    <li><strong>双降（健康状态）</strong>：<code>Training Loss</code> 稳步走低，同时 <code>Validation Loss</code> 也在持续下降——模型正在真正掌握通用的语言与业务逻辑。</li>
+    <li><strong>背题反弹（过拟合现形）</strong>：<code>Training Loss</code> 已经跌破 1.0，但 <code>Validation Loss</code> 突然开始拐头向上升到 2.5 以上——<strong>立刻停止训练！</strong> 说明模型已经把练习题死记硬背下来了，碰到新题全军覆没。</li>
+  </ul>
+
+  <div class="exercise">
+    <p class="ex-head">练习 6-A · 多轮 ChatML 模板探针（观察特殊 Token 边界）</p>
+    <p><strong>目标</strong>：亲眼看看 Qwen 的 Chat Template（套版工具）是如何把一个多轮 JSON 数组编译成带特殊暗号的纯文本的。</p>
+    <ol>
+      <li>在 Colab 新开一个单元格，复制下方完整代码直接运行（仅加载 Tokenizer，耗时不到 10 秒）。</li>
+      <li>观察控制台打印出的文本，回答两个问题：
+        <ul>
+          <li>第一轮回答结束、到第二轮用户提问开始，中间由哪几个特殊 Token 进行了隔离？</li>
+          <li>最后一句话的末尾，是什么标记代表整场对话的终结？</li>
+        </ul>
+      </li>
+    </ol>
+<pre>from unsloth import FastLanguageModel
+
+# ① 仅加载 Tokenizer（不需要加载大模型，不占显存，秒级启动）
+_, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+    max_seq_length = 2048,
+    load_in_4bit = True,
+)
+
+# ② 构造一段真实多轮客服对话（两轮问答）
+messages = [
+    {"role": "system", "content": "你是一名专业的智能客服助手。"},
+    {"role": "user", "content": "你好，我刚买的耳机左耳没有声音。"},
+    {"role": "assistant", "content": "您好！请先尝试长按耳机仓按钮 10 秒重置配对。"},
+    {"role": "user", "content": "还是不行，指示灯一直闪红灯。"},
+    {"role": "assistant", "content": "红灯代表硬件异常，请提供订单号，我为您申请换新。"}
+]
+
+# ③ 执行套版渲染（转为带暗号的纯文本）
+formatted_text = tokenizer.apply_chat_template(
+    messages,
+    tokenize = False,             # 先看纯文本字符串
+    add_generation_prompt = False # 训练模式：不在末尾追加空白 assistant 提示
+)
+
+print("=== 编译套版后的真实 ChatML 文本 ===")
+print(formatted_text)</pre>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>实测输出记录（2026-09-28）：</strong></p>
+<pre>&lt;|im_start|&gt;system
+你是一名专业的智能客服助手。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+你好，我刚买的耳机左耳没有声音。&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+您好！请先尝试长按耳机仓按钮 10 秒重置配对。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+还是不行，指示灯一直闪红灯。&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+红灯代表硬件异常，请提供订单号，我为您申请换新。&lt;|im_end|&gt;</pre>
+    <p><strong>两道思考题批改：</strong></p>
+    <ul>
+      <li><strong>边界隔离符</strong>：第一轮回答结束为 <code>&lt;|im_end|&gt;</code>，换行后紧跟第二轮提问开始 <code>&lt;|im_start|&gt;user</code>。两个标记背靠背无缝衔接，严格定义了角色交替。</li>
+      <li><strong>整场终结符</strong>：全篇终结标记正是 <code>&lt;|im_end|&gt;</code>。这铁证般印证了第 7 章的结论——<strong>Qwen 词表里的 EOS，真身就是这个 <code>&lt;|im_end|&gt;</code></strong>！模型一旦吐出它就立刻停笔。</li>
+    </ul>
+    <p><strong>意外发现的大彩蛋（2026 推理模型核心机制）：</strong></p>
+    <p>注意观察最后一条 assistant 回答前，自动冒出了 <code>&lt;think&gt;
+
+&lt;/think&gt;</code> 标签！这是因为 Qwen3 采用了类似 DeepSeek-R1 的混合深度推理（Thinking）机制。Qwen3 的 Jinja 模板会自动在最终回复前保留思维链（Chain of Thought）区域，供模型在此进行隐式或显式逻辑推导。你在没有看源码的情况下，直接用探针代码抓到了这一 2026 年最前沿的工业特征！</p>
+    </details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 6-B · 实弹演练：带 Loss Masking 与验证集考核的完整训练</p>
+    <p><strong>目标</strong>：告别第 7 章的「盲目背题」，真正运行一次具备「答案遮罩」和「实时考试（Validation）」的现代训练流程。</p>
+    <ol>
+      <li>直接复制下方自包含完整脚本在 Colab 运行（耗时约 1~2 分钟）。</li>
+      <li>观察日志输出：
+        <ul>
+          <li>检查在第 20 步、第 40 步、第 60 步时，控制台打印出的 <code>Validation Loss</code>。</li>
+          <li>对比 <code>Training Loss</code> 与 <code>Validation Loss</code>，判断当前的训练是否健康（是否出现过拟合反弹？）。</li>
+        </ul>
+      </li>
+      <li>将你实测的 Loss 数据记录下来作为交卷凭证。</li>
+    </ol>
+<pre>import os, gc, torch
+from datasets import load_dataset
+from unsloth import FastLanguageModel, train_on_responses_only
+from trl import SFTTrainer
+from transformers import TrainingArguments
+
+# ① 加载底座模型与 LoRA 适配器
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+    max_seq_length = 2048,
+    load_in_4bit = True,
+)
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = 16,
+    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_alpha = 16,
+    lora_dropout = 0,
+    bias = "none",
+    use_gradient_checkpointing = "unsloth",
+)
+
+# ② 数据管线：清洗过滤出 300 条短文本
+prompt_style = """### 指令：
+{}
+
+### 输入：
+{}
+
+### 回答：
+{}"""
+EOS = tokenizer.eos_token
+
+raw = load_dataset("shibing624/alpaca-zh", split="train")
+# 过滤：回答长度在 15~100 字，且不含花括号等残留符号
+clean = raw.filter(lambda r: 15 < len(r["output"]) < 100 and "{" not in r["output"])
+small = clean.shuffle(seed=42).select(range(300))
+formatted = small.map(lambda r: {"text": prompt_style.format(r["instruction"], r["input"], r["output"]) + EOS})
+
+# ③ 8:2 切分考卷（240 条日常训练，60 条保留作为独立模拟考）
+split_ds = formatted.train_test_split(test_size=0.2, seed=42)
+train_ds = split_ds["train"]
+eval_ds  = split_ds["test"]
+print(f"数据准备完毕：训练集 {len(train_ds)} 条，验证集 {len(eval_ds)} 条")
+
+# ④ 配置训练参数：开启 steps 周期性考试
+args = TrainingArguments(
+    output_dir = "outputs_masked_eval",
+    per_device_train_batch_size = 8,
+    per_device_eval_batch_size  = 8,
+    num_train_epochs = 3,
+    learning_rate = 2e-4,
+    logging_steps = 10,
+    eval_strategy = "steps",     # 定期跑验证集
+    eval_steps = 20,             # 每 20 步考一次试
+    save_strategy = "no",
+    report_to = "none",
+)
+
+trainer = SFTTrainer(
+    model = model,
+    tokenizer = tokenizer,
+    train_dataset = train_ds,
+    eval_dataset = eval_ds,
+    dataset_text_field = "text",
+    max_seq_length = 2048,
+    args = args,
+)
+
+# ⑤ ★ 核心工业级关键行：开启答案遮罩（题干打标 -100，只对答案求导！）
+trainer = train_on_responses_only(
+    trainer,
+    instruction_part = "### 指令：\n",
+    response_part = "### 回答：\n",
+)
+
+# ⑥ 启动训练
+trainer.model.config.use_cache = False
+print("开始训练（带答案遮罩 + 验证集监控）...")
+trainer.train()</pre>
+    <figure class="figure">
+<svg viewBox="0 0 650 270" style="max-width:100%;height:auto" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="练习 6-B 实测：Train Loss vs Validation Loss">
+  <!-- 背景框 -->
+  <rect x="50" y="15" width="560" height="220" fill="#fffdf8" stroke="#d9d2c0" rx="6"/>
+  <!-- 水平参考线与刻度 -->
+  <line x1="50" y1="220" x2="610" y2="220" stroke="#d9d2c0"/>
+  <line x1="50" y1="172.5" x2="610" y2="172.5" stroke="#ece7d9"/>
+  <line x1="50" y1="125" x2="610" y2="125" stroke="#ece7d9"/>
+  <line x1="50" y1="77.5" x2="610" y2="77.5" stroke="#ece7d9"/>
+  <line x1="50" y1="30" x2="610" y2="30" stroke="#ece7d9"/>
+  
+  <text x="42" y="224" font-size="10" text-anchor="end" fill="#8a8272">1.2</text>
+  <text x="42" y="176" font-size="10" text-anchor="end" fill="#8a8272">1.5</text>
+  <text x="42" y="129" font-size="10" text-anchor="end" fill="#8a8272">1.8</text>
+  <text x="42" y="81" font-size="10" text-anchor="end" fill="#8a8272">2.1</text>
+  <text x="42" y="34" font-size="10" text-anchor="end" fill="#8a8272">2.4</text>
+
+  <!-- 阶段背景高亮：过拟合区间 -->
+  <rect x="215.7142857142857" y="15" width="364.28571428571433" height="205" fill="#a03b2a" opacity="0.05"/>
+  <text x="397.85714285714283" y="28" font-size="10.5" fill="#a03b2a" font-weight="700" text-anchor="middle">⚠️ 验证集止跌反弹（死记硬背区间）</text>
+
+  <!-- x 轴刻度 -->
+  <text x="70.0" y="250" font-size="11" text-anchor="middle" fill="#8a8272">Step 20</text><text x="215.7142857142857" y="250" font-size="11" text-anchor="middle" fill="#8a8272">Step 40</text><text x="361.4285714285714" y="250" font-size="11" text-anchor="middle" fill="#8a8272">Step 60</text><text x="507.1428571428571" y="250" font-size="11" text-anchor="middle" fill="#8a8272">Step 80</text><text x="580.0" y="250" font-size="11" text-anchor="middle" fill="#8a8272">Step 90</text>
+
+  <!-- 折线：Train Loss (蓝) -->
+  <polyline points="70.0,79.1 215.7,144.5 361.4,149.9 507.1,187.9 580.0,186.1" fill="none" stroke="#3d5a73" stroke-width="2.5"/>
+  <!-- 折线：Val Loss (红) -->
+  <polyline points="70.0,56.1 215.7,64.4 361.4,60.9 507.1,57.1 580.0,56.3" fill="none" stroke="#a03b2a" stroke-width="2.5" stroke-dasharray="5,4"/>
+
+  <!-- 数据点与数值标注 -->
+  <circle cx="70.0" cy="79.1" r="4.5" fill="#3d5a73"/><text x="70.0" y="71.1" font-size="10" fill="#3d5a73" text-anchor="middle" font-weight="700">2.09</text><circle cx="215.7142857142857" cy="144.5" r="4.5" fill="#3d5a73"/><text x="215.7142857142857" y="136.5" font-size="10" fill="#3d5a73" text-anchor="middle" font-weight="700">1.68</text><circle cx="361.4285714285714" cy="149.9" r="4.5" fill="#3d5a73"/><text x="361.4285714285714" y="141.9" font-size="10" fill="#3d5a73" text-anchor="middle" font-weight="700">1.64</text><circle cx="507.1428571428571" cy="187.9" r="4.5" fill="#3d5a73"/><text x="507.1428571428571" y="179.9" font-size="10" fill="#3d5a73" text-anchor="middle" font-weight="700">1.40</text><circle cx="580.0" cy="186.1" r="4.5" fill="#3d5a73"/><text x="580.0" y="178.1" font-size="10" fill="#3d5a73" text-anchor="middle" font-weight="700">1.41</text>
+  <circle cx="70.0" cy="56.1" r="4.5" fill="#a03b2a"/><text x="70.0" y="48.1" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">2.23</text><circle cx="215.7142857142857" cy="64.4" r="4.5" fill="#a03b2a"/><text x="215.7142857142857" y="56.4" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">2.18</text><circle cx="361.4285714285714" cy="60.9" r="4.5" fill="#a03b2a"/><text x="361.4285714285714" y="52.9" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">2.21</text><circle cx="507.1428571428571" cy="57.1" r="4.5" fill="#a03b2a"/><text x="507.1428571428571" y="49.1" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">2.23</text><circle cx="580.0" cy="56.3" r="4.5" fill="#a03b2a"/><text x="580.0" y="48.3" font-size="10" fill="#a03b2a" text-anchor="middle" font-weight="700">2.23</text>
+
+  <!-- 最佳检查点高亮 -->
+  <circle cx="215.7142857142857" cy="64.4" r="8" fill="none" stroke="#2e7d32" stroke-width="2"/>
+  <text x="215.7142857142857" y="84.4" font-size="10" fill="#2e7d32" font-weight="700" text-anchor="middle">★ 最优甜点 (2.18)</text>
+
+  <!-- 图例 -->
+  <line x1="70" y1="262" x2="95" y2="262" stroke="#3d5a73" stroke-width="2.5"/>
+  <text x="100" y="265" font-size="11" fill="#3d5a73">Training Loss（一路狂跌）</text>
+
+  <line x1="280" y1="262" x2="305" y2="262" stroke="#a03b2a" stroke-width="2.5" stroke-dasharray="5,4"/>
+  <text x="310" y="265" font-size="11" fill="#a03b2a">Validation Loss（Step 40 后触底反弹）</text>
+</svg>
+<figcaption>图 6-2 · 练习 6-B 学生实测（2026-09-28）：验证集展现教科书般的「U 型触底反弹」——Step 40 达到泛化能力巅峰（2.18），随后模型开始死记硬背，Validation Loss 不降反升。</figcaption>
+</figure>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>实测日志记录（2026-09-28 · 240条训练 / 60条验证 · 3 Epochs）：</strong></p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Step</th><th>Training Loss（日常练题）</th><th>Validation Loss（模拟考）</th><th>状态诊断</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>20</td><td>2.090</td><td>2.235</td><td>正常学习阶段</td></tr>
+          <tr><td>40</td><td>1.677</td><td><strong>2.183</strong></td><td><strong>★ 最优点（泛化能力巅峰）</strong></td></tr>
+          <tr><td>60</td><td>1.643</td><td>2.205</td><td>⚠️ 开始出现轻微过拟合</td></tr>
+          <tr><td>80</td><td>1.403</td><td>2.229</td><td>⚠️ 训练集狂跌，验证集持续恶化</td></tr>
+          <tr><td>90</td><td>1.414</td><td>2.234</td><td>⚠️ 几乎回到初始考卷水平（死记硬背）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>实测核心结论（教科书级过拟合现形记）：</strong></p>
+    <ul>
+      <li><strong>只看 Training Loss 会被欺骗</strong>：从第 40 步到第 90 步，Training Loss 从 1.67 一路狂跌到 1.41，看起来模型越来越聪明、学得越来越好。</li>
+      <li><strong>验证集照妖镜戳破假象</strong>：Validation Loss 在 <strong>第 40 步达到最低点（2.183）</strong>，随后开始拐头向上爬升（2.205 ➔ 2.229 ➔ 2.234）！</li>
+      <li><strong>工业处置策略</strong>：在真实生产中，最佳模型应该取 <strong>Step 40 时的 Checkpoint</strong>，而不是第 90 步训练结束时的模型！多训练的 50 步不仅白费算力，还让模型染上了死记硬背的坏习惯。这就直接引出了下一章的核心武器——<strong>早停机制（Early Stopping）</strong>。</li>
+    </ul>
+    </details>
+  </div>
+
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li><strong>数据传送带全景</strong>：采集 ➔ 清洗净化 ➔ 格式套版 ➔ 答案遮罩 ➔ 考卷切分入炉，5 步环环相扣。</li>
+      <li><strong>格式与模板</strong>：工业微调统一存标准 <code>messages</code> 数组，靠 Tokenizer 的 Chat Template（套版工具）编译成带专用暗号的单行文本。</li>
+      <li><strong>清洗四大防范</strong>：绝不截断回答中间（防断头）、正则排查 GIGO 残留、排查特殊标记注入、哈希指纹去重。</li>
+      <li><strong>Loss Masking</strong>：利用 PyTorch 的 <code>ignore_index=-100</code> 机制，使输入考题不计入损失也不回传梯度，让算力聚焦在答案生成。</li>
+      <li><strong>验证集照妖镜</strong>：保留 20% 未见过的数据作为考卷，用周期性的 <code>Validation Loss</code> 及时掐死死记硬背与过拟合。</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>Data Pipeline 数据流水线</dt><dd>将未处理的原始业务文本转化为高质量、可用于梯度更新的张量数据的全套工程链条</dd>
+    <dt>Chat Template / 套版机制</dt><dd>各大模型预设的排版规则，自动将 messages 数组填充并组装为带专属特殊暗号的纯文本</dd>
+    <dt>Truncation 截断事故</dt><dd>文本过长时生硬切断导致丢失结尾 EOS 标记的工程故障，会诱发模型生成停不下来的坏毛病</dd>
+    <dt>Loss Masking / -100 标签</dt><dd>在反向传播计算中屏蔽 Prompt 部分，使梯度 100% 集中在回答部分的优化技术</dd>
+    <dt>Validation Loss 验证集损失</dt><dd>模型在独立保留的考卷上的测试得分，是衡量真实泛化能力、识别过拟合的核心指标</dd>
+  </dl>
+</section>

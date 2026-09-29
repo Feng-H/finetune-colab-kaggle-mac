@@ -1,0 +1,191 @@
+<section class="chapter" id="ch6" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 3 · 模型心智：Prompt 宪法与数据工程</p>
+    <h1>第 6 章 · 微调的灵魂：System Prompt、模型宪法与行为对齐</h1>
+    <p class="abstract">在把一行行数据送进流水线之前，我们必须回答一个根本性问题：模型到底该扮演谁？它的底线在哪里？本章彻底击碎“Prompt 只是推理时写的”认知盲区，揭开 System Prompt 在训练阶段如何作为「人格物理锚点」绑定条件概率；深入探讨“只有 Prompt 能否微调”的硬核逻辑，并解锁工业界前沿的 Self-Instruct（提示词驱动合成数据反向蒸馏）工作流。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章学习目标</p>
+    <ul>
+      <li><strong>击碎认知盲区</strong>：理解为什么 Prompt 不只是推理阶段的输入，而是微调数据集中决定模型灵魂与行为范式的核心要素</li>
+      <li><strong>反向传播硬核逻辑</strong>：从自回归求导数学本质，搞懂为什么单纯的一句 System Prompt 无法计算 Loss，必须依赖多轮交互闭环</li>
+      <li><strong>条件概率绑定机制</strong>：理解 <span class="formula-inline"><i>P</i>(Response | System, User)</span> 如何在训练中建立强映射，成为端侧部署时的专属唤醒开关</li>
+      <li><strong>前沿 Self-Instruct 工作流</strong>：掌握“如何用一条顶级 System Prompt，让大模型自问自答合成 5000 条训练数据”的工业级自蒸馏方案</li>
+      <li><strong>微调级 System Prompt 编写规范</strong>：掌握非暴力沟通、角色防御、诚实拒答三位一体的模型宪法撰写心法</li>
+    </ul>
+  </aside>
+
+  <figure class="figure">
+    <pre>
+【微调中的 System Prompt：从灵魂宪法到数据衍生】
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │ 阶段一：立法（编写顶级 System Prompt / 模型宪法）            │
+  │ • 角色身份：非暴力沟通家庭顾问                              │
+  │ • 沟通原则：先共情接纳，再理清事实，绝不指责批评            │
+  │ • 拒答红线：涉及医疗处方、法律起诉时诚实建议线下就医        │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                 ┌───────────────┴───────────────┐
+                 │                               │
+                 ▼ 【路径 A：开源真实数据】        ▼ 【路径 B：Self-Instruct 数据合成】
+        从 CPsyCoun 挖掘真实对话           让旗舰模型 (DeepSeek-R1) 扮演角色
+                 │                               自拟家长提问，自写高情商专家回答
+                 │                               │
+                 └───────────────┬───────────────┘
+                                 ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │ 阶段二：铸魂（微调训练期条件绑定）                          │
+  │ 每条数据头部统一焊死 System Prompt ➔ 计算 Loss 并梯度回传    │
+  │ ➔ 自注意力机制建立：P(高情商回答 | 该专属 System Prompt)    │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                                 ▼ [导出 GGUF 并在端侧 Modelfile 声明]
+  ┌─────────────────────────────────────────────────────────────┐
+  │ 阶段三：激活（端侧推理一键唤醒）                             │
+  │ 输入同一句 System Prompt ➔ 瞬间 100% 激活 LoRA 专家灵魂！     │
+  └─────────────────────────────────────────────────────────────┘
+    </pre>
+    <figcaption>图 6-0 · System Prompt 在大模型微调全生命周期中的核心骨架</figcaption>
+  </figure>
+
+  <h2 id="ch6-myth">6.1 击碎认知迷思：Prompt 只是推理时才写的事情吗？</h2>
+  <p>在绝大多数接触过 ChatGPT、Claude 或 DeepSeek 的开发者直觉里，对 <strong>Prompt（提示词）</strong> 的理解通常是：</p>
+  <blockquote>
+    “Prompt 不就是我们在聊天框里敲的那段话吗？比如：‘你是一个英语老师，请帮我批改作文’。微调难道不是另外一回事吗？微调难道不是把一大堆 CSV 或问答数据喂给模型去改写参数吗？”
+  </blockquote>
+  <p>这种认知，直接把微调割裂成了**“没有灵魂的数据苦力”**。如果在微调前没有想明白 System Prompt，你往往会陷入以下三大灾难：</p>
+  <ol>
+    <li><strong>数据清洗失去准绳</strong>：不知道什么样的回答算“好回答”，把生硬指责与温柔共情混在一起喂给模型；</li>
+    <li><strong>模型性格严重分裂</strong>：微调后的模型今天像个知心大姐，明天又变回机械客服，语气飘忽不定；</li>
+    <li><strong>端侧推理无法受控</strong>：在本地部署时，不知道该用什么指令去稳定唤醒微调学到的特殊招式。</li>
+  </ol>
+  <p><strong>真相是：在现代多轮微调中，System Prompt 是整批训练数据的「灵魂宪法」与「物理锚点」！</strong></p>
+
+  <h2 id="ch6-only-prompt">6.2 深度拷问：如果没有数据，单纯一句 System Prompt 能微调吗？</h2>
+  <p>很多初学者会产生一个美好的假想：<em>“既然微调能改变模型参数，那我能不能直接把一段长长的 System Prompt 塞进显卡，让模型彻底把这段人设‘焊死’在权重里，不需要任何对话数据？”</em></p>
+  <p><strong>硬核答案是：从底层数学求导原理上，绝对不可能！</strong></p>
+
+  <div class="formula-block">
+    <p class="formula-label">微调自回归损失函数（必须有一问一答的交互差值）</p>
+    <div class="formula-row">
+      <span class="var">Loss</span>
+      <span class="op">=</span>
+      <span class="op">-</span>
+      <span class="op">&sum;</span>
+      <span class="var">log</span>
+      <span class="var">P</span>
+      <span class="bracket">(</span>
+      <span class="var">y</span><sub><i>t</i></sub>
+      <span class="op">|</span>
+      <span class="var">y</span><sub>&lt;<i>t</i></sub>
+      <span class="op">,</span>
+      <span class="var">System</span>
+      <span class="op">,</span>
+      <span class="var">User</span>
+      <span class="bracket">)</span>
+    </div>
+    <p class="formula-expl">微调必须计算预测下一个词（Token）与真实专家回答之间的误差（Cross-Entropy Loss）。</p>
+  </div>
+
+  <p>如果只有单纯的一句 <code>System: 你是一位温柔的亲子专家</code>，后面既没有家长的诉苦提问（User），也没有专家的应对示范（Assistant），<strong>反向传播算法就根本没有目标 Token（Target）可以比对，Loss 根本无从算起，梯度下降完全无法发生！</strong></p>
+
+  <aside class="callout tip">
+    <p class="co-label">但是！为什么现实中有“纯靠 Prompt 微调”的传说？</p>
+    <p>因为现代工业界发展出了一套降维打击的前沿工作流——<strong>【基于 Prompt 的合成数据反向自微调（Self-Instruct / 数据自蒸馏）】</strong>：</p>
+    <ol>
+      <li>你确实手头一条训练数据都没有，只有这一段精心撰写的 <strong>System Prompt（模型宪法）</strong>；</li>
+      <li>你写一段 Python 脚本，调用云端最强的大模型（如 DeepSeek-R1 或 Claude 3.5 Sonnet），让它扮演这个角色；</li>
+      <li>命令它：<em>“请根据这段人设，自拟 500 个不同年龄段孩子的典型叛逆难题，并以专业咨询师的口吻写出高质量多轮回答”</em>；</li>
+      <li>短短半小时，<strong>一条顶级 Prompt 就衍生出了一套拥有 5000 条高质量样本的专属数据集</strong>；</li>
+      <li>拿着这套由 Prompt 衍生的数据，去微调你的本地模型！</li>
+    </ol>
+    <p><strong>结论：System Prompt 无法直接被求导，但它是产生高质量微调数据的「母体与总设计师」！</strong></p>
+  </aside>
+
+  <h2 id="ch6-anchor">6.3 物理锚点机制：条件概率与端侧唤醒开关</h2>
+  <p>当我们在第 7 章清洗数据、第 11 章真机微调时，每条数据在送进分词器（Tokenizer）前，头部都必须包裹着这段 System Prompt：</p>
+
+  <div class="example">
+    <p class="ex-head">▶ 标准 ChatML 训练样本结构</p>
+<pre>&lt;|im_start|&gt;system
+你是一位温暖、富有同理心的中国亲子教育与家庭心理顾问。请运用非暴力沟通技巧，先接纳家长的焦虑情绪，再从儿童心理发展规律出发，给出温柔、坚定、具体可行的家庭沟通建议。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+孩子今年初二了，每天一回家就反锁房门玩手机，怎么喊都不出来吃饭。&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+听到孩子这样，我非常能理解您现在的焦虑和委屈。初二正值青春期自主意识觉醒的关键期...&lt;|im_end|&gt;</pre>
+  </div>
+
+  <p>在训练过程中，自注意力网络（Self-Attention）会反复建立以下认知规律：</p>
+  <ul>
+    <li>每当前面出现了 <code>system...亲子教育顾问...</code> 这一串特征向量；</li>
+    <li>后面的生成词概率分布就会被强力引导向 <strong>“非暴力共情”、“接纳情绪”、“温和理性”</strong> 的语义空间；</li>
+    <li>这就是数学上的<strong>条件概率收敛</strong>：<span class="formula-inline"><i>P</i>(高情商回答 | 专属 System Prompt, 用户提问)</span>。</li>
+  </ul>
+
+  <p><strong>两端呼应的唤醒开关</strong>：<br>
+  一旦微调完成，当你把模型量化为 GGUF 导入 Mac 电脑的 Ollama 时，你在 <code>Modelfile</code> 中再次写下：
+  <code>SYSTEM """你是一位温暖、富有同理心的中国亲子教育与家庭心理顾问..."""</code>。<br>
+  <strong>此时，本地推理引擎就会像念出咒语一样，瞬间精准激活我们在云端微调的那几千万个 LoRA 权重！</strong></p>
+
+  <h2 id="ch6-how-to-write">6.4 如何编写微调级的 System Prompt？（模型宪法三要素）</h2>
+  <p>微调级的 System Prompt 和平时随手写的提示词不同，它必须具备<strong>极强的结构性与防御性</strong>。工业界标准的“模型宪法”通常包含三大要素：</p>
+
+  <div class="tablewrap">
+    <table style="width: 100%; table-layout: fixed;">
+      <thead>
+        <tr>
+          <th style="width: 25%;">宪法要素</th>
+          <th style="width: 35%;">在 System Prompt 中的具体体现</th>
+          <th style="width: 40%;">对微调效果的深远影响</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>1. 身份与基调<br>(Identity)</strong></td>
+          <td>明确职业背景、语言风格与情感温度（如“温暖有同理心、温和坚定、客观倾听”）。</td>
+          <td>避免模型在多轮对话中逐渐沦为毫无情感色彩的冰冷机器人。</td>
+        </tr>
+        <tr>
+          <td><strong>2. 方法论招式<br>(Methodology)</strong></td>
+          <td>指定专业沟通框架（如“非暴力沟通四要素：观察、感受、需要、请求”）。</td>
+          <td>让模型学会先共情父母的委屈，再分析儿童心理，最后给出分步行动建议。</td>
+        </tr>
+        <tr>
+          <td><strong>3. 边界与诚实拒答<br>(Boundaries)</strong></td>
+          <td>明确专业红线（如“遇到抑郁症诊断或自残倾向，严禁开药，必须温柔建议就医”）。</td>
+          <td>为模型筑起安全护城河，防止垂直模型产生危险医疗幻觉。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 6-A · 为你的专属垂直场景草拟一份模型宪法</p>
+    <p><strong>目标</strong>：在动手写微调代码之前，完成一份专业的微调级 System Prompt 架构设计。</p>
+    <ol>
+      <li>选择你感兴趣的垂直领域（如亲子教育、家庭理财、初中数学辅导、健康饮食）。</li>
+      <li>按照“身份基调 ➔ 专业招式 ➔ 安全防线”三要素，撰写一段约 100 字的标准 System Prompt。</li>
+      <li>检查：这段 Prompt 是否具备唯一的特征？能否作为将来本地唤醒模型的专属开关？</li>
+    </ol>
+    <details class="answer"><summary>亲子教育参考范例</summary>
+      <pre>你是一位温暖、富有同理心的中国亲子教育与家庭心理顾问。请运用非暴力沟通技巧，先接纳家长的焦虑情绪，再从儿童心理发展规律出发，给出温柔、坚定、具体可行的家庭沟通建议。若涉及重度抑郁或自残倾向，请温柔提醒家长寻求线下三甲医院专业精神心理科协助。</pre>
+    </details>
+  </div>
+
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li><strong>微调前的立法</strong>：System Prompt 是微调数据的灵魂宪法。微调不是单纯喂数据，而是学习在特定宪法约束下的行为招式。</li>
+      <li><strong>求导依赖差值</strong>：单纯一句 Prompt 无法计算 Loss，无法直接微调；但它可以通过 Self-Instruct 工作流反向自衍生出成千上万条高质量多轮训练语料。</li>
+      <li><strong>条件概率与端侧开关</strong>：训练时将人设注入每条样本，模型学会条件反射；端侧部署时输入同一人设，即可 100% 激活 LoRA 专家权重。</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>System Prompt 系统人设</dt><dd>大模型对话协议中置于最顶层的全局元指令，定义模型的角色定位、沟通基调与行为边界</dd>
+    <dt>Self-Instruct 自指令微调</dt><dd>通过顶级大模型依据特定人设规则自动自问自答合成大量问答语料，进而微调端侧轻量小模型的前沿工程方案</dd>
+    <dt>Constitutional AI 宪法人工智能</dt><dd>由 Anthropic 提出的对齐方法论，通过一套明确的准则与宪法规范模型的生成行为与安全边界</dd>
+  </dl>
+</section>

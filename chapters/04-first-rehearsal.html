@@ -1,0 +1,266 @@
+<section class="chapter" id="ch4" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 2 · 初涉微调：给底座挂上 LoRA 踏板</p>
+    <h1>第 4 章 · 第一次排练：给 Qwen3-0.6B 挂上效果器踏板</h1>
+    <p class="abstract">前四章你练的是账本和卡；本章真枪实弹：加载一支真乐队（Qwen3-0.6B）、挂上效果器踏板（LoRA）、用一套小曲目集排练、试演对比——第一次亲眼看见模型因你而改变。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li>跑通 LoRA 微调全流程六步：装库→加载→挂踏板→数据→排练→试演</li>
+      <li>说出 from_pretrained / get_peft_model 每个参数的含义</li>
+      <li>读懂训练日志：loss、步数、显存占用（对照第 2 章手算）</li>
+      <li>用 before/after 试演验证风格是否长在了乐队身上</li>
+    </ul>
+  </aside>
+
+  <h2 id="ch4-pipeline">4.0 排练总览</h2>
+  <div class="figure">
+<pre>① 安装 Unsloth
+② 加载模型（from_pretrained：Qwen3-0.6B 4bit）
+③ 挂 LoRA 适配器（get_peft_model：r=16）
+④ 准备数据集（100 条「叮！风格」）
+⑤ 训练（SFTTrainer：epochs=3, lr=2e-4）
+⑥ 推理对比（同一问题，训练前后）</pre>
+    <figcaption>图 4-1 · 六步流水线（括号内为乐队版直觉，正文用术语）</figcaption>
+  </div>
+
+  <h2 id="ch4-install">4.1 ▶ 第一步：装 Unsloth</h2>
+  <pre>pip install unsloth</pre>
+  <p>Unsloth＝压在 Hugging Face 训练栈之下的加速引擎（第 1 章辑录见过：API 不变、约 2 倍速、省一半显存）。Kaggle 用户：先开 Internet（Settings → Internet → On）再装。装完重启不必要——直接进下一格。</p>
+
+  <h2 id="ch4-load">4.2 ▶ 第二步：加载模型（乐队进场）</h2>
+  <div class="example">
+    <p class="ex-head">▶ 例 4-1 · 加载 Qwen3-0.6B（4bit 预量化版）</p>
+<pre>from unsloth import FastLanguageModel
+import torch
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name      = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",  # 官方 4bit 版：下载快、省排练室
+    max_seq_length  = 2048,   # 一次能看的最长 token 数（曲子的最大长度）
+    dtype           = None,   # 自动选精度（T4 上自动 fp16——没有 bf16，账本课讲过）
+    load_in_4bit    = True,   # 底座 4bit 进场：0.6B × 0.5 字节 ≈ 0.3 GB（换算尺！）
+    full_finetuning = False,  # 不做全参（我们要挂踏板，不动乐队本体）
+)</pre>
+  </div>
+  <aside class="callout note">
+    <p class="co-label">注：这一步发生的三件事</p>
+    <p>① 从 Hugging Face 下载模型文件（乐队全家福，约 0.5GB，第一次慢、有缓存）；② 解压进显存（排练室占用 ~0.3-0.6GB，用你的账本能提前算出）；③ tokenizer 一起进场——它是「文字↔编号」的翻译官（查表算子的那张表）。</p>
+  </aside>
+
+  <h2 id="ch4-lora">4.3 ▶ 第三步：挂 LoRA 适配器（效果器踏板）</h2>
+  <div class="example">
+    <p class="ex-head">▶ 例 4-2 · 挂 LoRA 踏板</p>
+<pre>model = FastLanguageModel.get_peft_model(
+    model,
+    r = 16,                    # 踏板旋钮的「档位」：秩——旋钮越多表达力越强、占地越大
+    target_modules = [         # 踏板挂在哪几个位置（乐队里 7 类关键接点）：
+        "q_proj", "k_proj", "v_proj", "o_proj",   #   注意力四件（第 5 章细讲）
+        "gate_proj", "up_proj", "down_proj"],     #   前馈三件
+    lora_alpha = 16,           # 踏板输出的音量比例（常取 = r）
+    lora_dropout = 0,          # 排练时随机关掉部分信号的防过拟合手段（先用 0）
+    bias = "none",             # 偏置不训练（省地方）
+    use_gradient_checkpointing = "unsloth",  # 省显存大招：排练时擦掉中间谱子、要时重算
+)</pre>
+  </div>
+  <p>挂完会打印一行 <code>trainable params: XX M || all params: XXX M || trainable%: X.XX</code>——<strong>这就是第 2 章公式的 N_可训练</strong>：0.6B 的乐队，只挂了几百万旋钮，trainable% 大约 1-2%。跑到这里时，把它抄下来。</p>
+
+  <h2 id="ch4-data">4.4 ▶ 第四步：准备数据集（曲目集）</h2>
+  <p>任务选「叮！风格」：教乐队<strong>所有回答都以「叮！」开头</strong>——简单、变化肉眼可见、百来条例子就能学会。数据两条路线：<strong>路线 A 手造（✂️ 仅供理解格式，别用来真训练）</strong>；<strong>路线 B 曲库真数据（✅ 训练用这条）</strong>。新手常见误区是手编数据训练——你刚经历过的占位符事故就是这条路的坑。</p>
+  <h3>路线 A：手造数据（✂️ 格式解剖用——看懂即可，勿用于训练）</h3>
+  <div class="example">
+    <p class="ex-head">例 4-3 · A · 手造样例：三段式长什么样</p>
+<pre>import json
+from datasets import Dataset
+
+questions = [
+    "天空为什么是蓝色的？", "猫为什么爱睡觉？", "水为什么会结冰？",
+    "为什么要读书？", "彩虹是怎么来的？", "鱼在水里怎么呼吸？",
+    # ……（书附完整列表，或自己再编几句）
+] * 25   # 重复凑 100 条（真实项目里每条都该不同——第 6 章讲为什么）
+
+rows = [{"instruction": "回答用户的问题", "input": q,
+         "output": "叮！" + "（简短有趣的回答）"} for q in questions]
+dataset = Dataset.from_list(rows)
+
+prompt_style = """### 指令：
+{}
+
+### 输入：
+{}
+
+### 回答：
+{}"""
+EOS = tokenizer.eos_token   # 曲子的「结束符」：乐队看到它就知道唱完了
+
+def format_row(row):
+    return {"text": prompt_style.format(row["instruction"], row["input"], row["output"]) + EOS}
+
+dataset = dataset.map(format_row)</pre>
+  </div>
+  <p><aside class="callout note">
+    <p class="co-label">注：EOS 是什么（End Of Sequence）</p>
+    <p>LLM 按「猜下一个 token」的机制生成，<strong>天生不知道何时停</strong>——没有停止信号就会一直编到被 max_new_tokens 掐断。EOS＝词表里专门保留的特殊编号，唯一含义是「完了」：模型生成到它，generate() 即停（乐队版：曲谱终止符，学会看到就收弓）。训练数据里 output+EOS ＝ 教会模型「答完就收」的格式纪律——这就是试演时原版啰嗦不停、微调版干净收尾的原因。同族：BOS（开始符）、PAD（凑批填充符）——训练日志那行黄色警告就是 Unsloth 在自动对齐这三兄弟。两层停止：<code>max_new_tokens</code>＝外部强制上限；EOS＝模型自己知道说完了。</p>
+  </aside>
+
+  三个角色：<code>instruction</code>＝这段排练要练什么；<code>input</code>＝具体曲子；<code>output</code>＝目标演绎（叮！开头）。模板三段式是行业通用的 Alpaca 格式——第 6 章数据工程会专门解剖它。</p>
+
+  <h3>路线 B：从 Hugging Face 曲库拉真数据（✅ 训练用这条）</h3>
+  <p>真实项目不手编数据——HF 是音乐大市场：既能请现成乐队（模型），也能买曲目集（数据集，本节用后者）。<code>shibing624/alpaca-zh</code>（4.9 万条中文指令，CC-BY-4.0）的格式与本节模板无缝对接：</p>
+  <div class="example">
+    <p class="ex-head">▶ 例 4-3 · B · 真数据管线：拉取→清洗→注入风格→抽查（训练就用它）</p>
+<pre>from datasets import load_dataset
+
+prompt_style = """### 指令：
+{}
+
+### 输入：
+{}
+
+### 回答：
+{}"""                                  # ① 模板自包含（不依赖路线 A 的格子）
+EOS = tokenizer.eos_token              #    曲子的结束符
+
+raw = load_dataset("shibing624/alpaca-zh", split="train")     # ② 拉真数据
+raw = raw.filter(lambda r: 10 < len(r["output"]) < 150)      # ③ 清洗：留短回答
+small = raw.shuffle(seed=42).select(range(200))              #    随机抽 200 条
+small = small.map(lambda r: {"output": "叮！" + r["output"].strip()})  # ④ 注入风格
+dataset = small.map(lambda r: {"text":
+    prompt_style.format(r["instruction"], r["input"], r["output"]) + EOS})
+
+print(dataset[0]["text"])   # ⑤ ★ 训练前必做：抽查一条（占位符事故一条 print 就能抓获）</pre>
+  </div>
+  <aside class="callout tip">
+    <p class="co-label">提示：这就是数据工程的标准管线</p>
+    <p>拉取 → 清洗（长度/去重/过滤）→ 程序化改造（风格注入）→ <strong>抽查</strong> → 训练。第 6 章会把每一步展开成完整课程；今天先记住第 ④ 步的铁律：<strong>不抽查不训练</strong>。</p>
+  </aside>
+  <aside class="callout warning">
+    <p class="co-label">警告</p>
+    <p>例子里 <code>"（简短有趣的回答）"</code> 是占位符——实际使用时请换成真的答案文本（用大模型生成或手写均可，每条 1-3 句）。占位符数据练不出真风格，只能练出「叮！」这个习惯——对本章足够，对真项目不够。</p>
+  </aside>
+
+  <h2 id="ch4-train">4.5 ▶ 第五步：训练（排练）</h2>
+  <p>训练参数与排练指挥合成一格（完整版，直接复制）：</p>
+  <div class="example">
+    <p class="ex-head">▶ 例 4-4 · 训练参数与开排（完整，含全部 import）</p>
+<pre>from trl import SFTTrainer
+from transformers import TrainingArguments
+args = TrainingArguments(
+    output_dir = "outputs",           # 排练笔记存哪
+    per_device_train_batch_size = 8,  # 一次排几首（T4 显存不够就降到 4 或 2）
+    gradient_accumulation_steps = 1,  # 凑批技巧：先不用
+    num_train_epochs = 3,             # 整个歌单排 3 遍
+    learning_rate = 2e-4,             # 一次调多少（LoRA 常用 1e-4~3e-4）
+    logging_steps = 10,               # 每 10 步报一次成绩单
+    save_strategy = "no",             # 先不存检查点（第 7 章教你存/断点续排）
+    report_to = "none",               # 不接外部看板
+)
+trainer = SFTTrainer(model = model, tokenizer = tokenizer,
+                     train_dataset = dataset, dataset_text_field = "text",
+                     max_seq_length = 2048, args = args)
+trainer.model.config.use_cache = False
+trainer.train()   # ← 开始训练盯着 loss：从 ~2.x 一路往下</pre>
+  </div>
+  <p>训练日志每 10 步打一行，重点看两个数：<code>loss</code>（和目标版本的差距——应该整体下行）和行尾的显存占用（对照你第 2 章的账本预测）。T4 上 100 条×3 遍约 3-5 分钟。</p>
+
+  <h2 id="ch4-infer">4.6 ▶ 第六步：推理对比（试演）</h2>
+  <div class="example">
+    <p class="ex-head">▶ 例 4-5 · 排练前后同题对比（disable_adapter 拔踏板法）</p>
+<pre>FastLanguageModel.for_inference(model)   # 切到推理模式（不再训练）
+
+def ask(q):
+    inputs = tokenizer(prompt_style.format("回答用户的问题", q, ""), return_tensors="pt").to("cuda")
+    out = model.generate(**inputs, max_new_tokens=80, temperature=0.7)
+    return tokenizer.decode(out[0], skip_special_tokens=True).split("### 回答：")[-1].strip()
+
+# ★ 用训练集外的问题检验（背题≠学风格）
+print("【排练后】", ask("如何保持身体健康？"))
+with model.disable_adapter():            # 拔掉踏板看原乐队——同会话最公平的对比法
+    print("【拔掉踏板】", ask("如何保持身体健康？"))</pre>
+  </div>
+  <p>两处关键：<strong>问训练集外的题</strong>（检验泛化的风格而非背题）；<strong>disable_adapter 上下文</strong>临时拔掉 LoRA 踏板——同一会话、同一份权重，一行切回原版（踏板即插即拔的实证）。练成的标志：排练后以「叮！」开头且回答是真内容；拔掉踏板恢复原样。</p>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答（r=1 实验的意外发现）</p>
+    <p><strong>问：</strong>为什么拔掉踏板后，原版模型答完还啰嗦个不停、甚至自己编出「### 输出：」「### 问题：」？</p>
+    <p><strong>答：</strong>原版没学过「回答完就停」——我们的训练数据每条 output 后拼了 EOS（结束符），所以微调版不仅学会了叮！风格，还学会了<strong>何时闭嘴的格式纪律</strong>；原版不知道发 EOS，就一直编到 max_new_tokens 上限被掐断。「模型停不下来」是真实项目高频坑，根源几乎都在 EOS/模板处理。另：r=1 行为验证已闭环（0.11% 参数完成 100% 风格迁移，loss+行为双证据）。</p>
+  </aside>
+
+  <h2 id="ch4-trouble">4.7 已知坑排障卡</h2>
+  <aside class="callout warning">
+    <p class="co-label">警告：T4 上 PassManager::run failed</p>
+    <p>T4 + 新版 Unsloth 有已知问题：训练刚开始报 <code>RuntimeError: PassManager::run failed</code>（Triton 编译 bug）。三招依次试：① 重启会话重跑（最常有效）；② <code>pip install -U unsloth</code> 升级；③ 还不行换 Kaggle 的 T4 或 Colab 的 L4。这是你排障卡上的第一张：报错不是你的错，先查已知问题库（GitHub issues）再怀疑自己。</p>
+  </aside>
+
+  <div class="exercise">
+    <p class="ex-head">练习 4-A · 全流程首航（A 级照跑）</p>
+    <ol>
+      <li>按 ▶ 例 4-1 至 4-5 跑通全流程（推荐顺序：加载→先试演一次→训练→再试演）。</li>
+      <li>抄三样交卷：① 训练首尾 loss；② trainable params 那行；③ 排练前后同一问题的回答对比。</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改，含两次完整战役）</summary>
+    <p><strong>第一战（占位符数据，2026-09-27）：</strong>150 条 × 3 遍，loss 2.12→0.066，试演输出「叮！（简短有趣的回答）」——<strong>模型一字不差背出占位符</strong>：训练 100% 成功、数据是占位符。GIGO 第一课：模型不分辨对错，只学模式。</p>
+    <p><strong>第二战（路线 B 真数据）：</strong>alpaca-zh 200 条 + 叮！注入，loss 2.66→1.6 平台。关键认知：<strong>loss 只能同任务比，不能跨任务比</strong>——0.066 是死记一句话，1.6 是真任务的健康水位（200 个不同答案含不可压缩差异）。训练日志另见 Unsloth 双缓冲（搬运与排练重叠）与梯度卸载（暂存大仓库省排练室）。</p>
+    <p><strong>试演铁证（同题对照，训练集外问题）：</strong></p>
+    <p>【排练后】叮！保持身体健康需要坚持锻炼身体，合理饮食，充足睡眠，保持良好的心态……（叮✓ + 真内容✓）</p>
+    <p>【拔掉踏板】保持身体健康需要做以下几点：1. 健康饮食……（一行 disable_adapter 即回原版——踏板即插即拔实证）</p>
+    <p><strong>trainable params = 10,092,544 / 606,142,464（1.67%）</strong>＝第 2 章公式的 N_可训练 实测。</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 4-B · 换你自己的风格（B 级变体）</p>
+    <ol>
+      <li>把曲目集换成你自选的习惯：例如「每句结尾带『喵』」或「回答必以『根据排练笔记：』开头」——重造数据、重排、重试演。</li>
+    </ol>
+    <details class="answer"><summary>答案（待学生完成后补入）</summary></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 4-C · 用账本预判（C 级独立）</p>
+    <ol>
+      <li>把 r 从 16 改成 32：先用第 2 章公式预测 trainable params 大约变多少？再跑，对照打印的 trainable params 行验证。</li>
+    </ol>
+    <details class="answer"><summary>答案（待学生完成后补入）</summary></details>
+  </div>
+
+    <h2 id="ch04-bypass-switch">4.5 踏板的硬件旁通（Bypass）：<code>disable_adapter()</code> 一秒切回原生清音</h2>
+  <p>在现实的舞台上，吉他手踩下效果器踏板时，声音会变成轰鸣的失真音；当他再踩一脚开启<strong>“硬件旁通（True Bypass）”</strong>时，信号就会完全绕过内部电路，原汁原味地吐出吉他本身的清音。</p>
+  <p>在 LoRA 中，Hugging Face PEFT 库同样为我们提供了这个“瞬间旁通开关”——<strong><code>with model.disable_adapter():</code></strong> 上下文管理器！</p>
+
+  <div class="example">
+    <p class="ex-head">▶ 代码演示 · 无需卸载模型，在内存中瞬间对比原声与微调音色</p>
+<pre># 正常状态：信号流经 LoRA 踏板（输出经过微调的回答）
+response_tuned = model.generate(...)
+
+# 硬件旁通：用 with 包裹，进入该代码块时踏板完全休眠，出来后自动重新挂载！
+with model.disable_adapter():
+    # 这一刻，模型完全变回了 100% 纯净的原生底座！
+    response_base = model.generate(...)
+
+print("微调音色:", response_tuned)
+print("原生音色:", response_base)</pre>
+  </div>
+  <p>这个极其优雅的 Python 上下文特性，使得我们<strong>根本不需要在显存中载入两个庞大的模型，只凭一行代码就能在原生底座与微调模型之间光速切换</strong>！这个技巧，将在我们全书压轴的<strong>第 12 章毕业大项目（同台双盲裁决）</strong>中大放异彩！</p>
+
+<section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li>六步流水线：装库→加载（from_pretrained）→挂踏板（get_peft_model）→数据（三段式+模板+EOS）→排练（SFTTrainer）→试演（for_inference）</li>
+      <li>r＝踏板旋钮档位；alpha＝输出音量比例；trainable params 行＝第 2 章公式的 N_可训练实测</li>
+      <li>batch/epoch/lr 排练直觉：一次排几首/歌单排几遍/一次调多少</li>
+      <li>报错先查已知问题库（T4 PassManager 卡），再怀疑自己</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>SFT（Supervised Fine-Tuning）</dt><dd>监督微调：照着「范例曲目+目标演绎」排练——本章做的事</dd>
+    <dt>tokenizer</dt><dd>文字↔编号的翻译官；查表算子的那张表的管理员</dd>
+    <dt>EOS / 结束符</dt><dd>End Of Sequence：词表特殊编号，含义「完了」——模型生成到它即停；「何时闭嘴」是训练用 output+EOS 教出来的格式纪律</dd>
+    <dt>秩 r</dt><dd>踏板旋钮档位：表达力与占地的旋钮</dd>
+    <dt>lora_alpha</dt><dd>踏板输出音量比例（踏板效果的增益）</dd>
+    <dt>gradient checkpointing</dt><dd>省显存大招：排练时擦掉中间谱子、要用时重算（时间换空间）</dd>
+    <dt>Alpaca 格式</dt><dd>指令三段式：instruction（练什么）/input（曲子）/output（目标演绎）</dd>
+    <dt>SFTTrainer</dt><dd>Hugging Face trl 库的排练指挥——把四步循环包成了 .train() 一键</dd>
+  </dl>
+</section>

@@ -1,0 +1,187 @@
+<section class="chapter" id="ch3" data-status="draft">
+  <header class="chapter-opener">
+    <p class="kicker">模块 1 · 显存数学：显存账本与真卡实测</p>
+    <h1>第 3 章 · 真卡验证：手算 vs 显存实读与 OOM 破译</h1>
+    <p class="abstract">第 2 章的账本到手了，本章把它押上真显卡对质——用三个 CUDA 测量 API 逐项验证你的手算，然后故意把显存撑爆一次，学会读 OOM 的「遗言」。双平台（Colab / Kaggle）操作差异一并打通。</p>
+  </header>
+
+  <aside class="lo">
+    <p class="lo-title">本章你将学会</p>
+    <ul>
+      <li>在 Colab 与 Kaggle 各自开出一张 T4，说出两者配额/会话/持久化的差异</li>
+      <li>用 torch.cuda 三个测量 API 验证：分配 400MB、训练态=权重×4</li>
+      <li>亲手制造一次 OOM，读懂报错信息并修复</li>
+      <li>解释 nvidia-smi 读数为什么比 memory_allocated 大</li>
+    </ul>
+  </aside>
+
+  <h2 id="ch3-gpu-basics">3.0 硬件地基：GPU 到底是什么（零基础版）</h2>
+  <p>在碰真卡之前，把三个 hardware 问题讲透。不假设任何计算机体系知识。</p>
+
+  <h3>CPU vs GPU：教授军团 vs 小学生军团</h3>
+  <p>你的电脑里有两个「算东西的芯片」：</p>
+  <ul>
+    <li><strong>CPU</strong>：少量超强核心（几个到十几个），每个都能处理复杂逻辑——适合「一步一步、每步都不一样」的任务。你平时跑 TS 代码、开浏览器都是它。</li>
+    <li><strong>GPU</strong>（显卡）：几千个简单核心（T4 有 <strong>2560 个</strong>），每个只会算加减乘，但全员同时上阵——适合「<strong>海量一模一样的简单计算</strong>」。</li>
+  </ul>
+  <p>类比：<strong>CPU = 几位数学教授，GPU = 三千个会算术的小学生</strong>。算一亿道乘法题，教授输惨（他再快也只有几个人）；写一篇论文，小学生不行。而 LLM 的核心运算（矩阵乘，1.0 节的 <code>@</code>）恰好就是「一亿道独立的小乘加」——<strong>GPU 的完美猎物</strong>。这就是为什么训练模型全在 GPU 上。（「教授 vs 小学生军团」是行业通用讲法，属翻译层；对回乐队：三千名和声团员同时开嗓，一人一句简单和声。）</p>
+
+  <h3>内存 vs 显存：两个独立的仓库</h3>
+  <p>CPU 和 GPU 各自用各自的仓库：<strong>内存（RAM）</strong>给 CPU 用（几十 GB）；<strong>显存（VRAM）</strong>给 GPU 专用（T4 只有 <strong>16 GB</strong>）。关键规则：<strong>GPU 只能直接算显存里的数据</strong>——所以 <code>device="cuda"</code> 的意思是「把这块张量从内存搬到显存」（搬运本身耗时，以后会遇到「搬比算还慢」的场景）。你第 2 章记的账本，记的就是显存这个仓库的容量。</p>
+
+  <div class="example">
+    <p class="ex-head">术语身份证（首次出现，从零解释）</p>
+<pre>核心 core        GPU 里干活的计算单元（T4 = 2560 个）
+CUDA             NVIDIA 的 GPU 编程软件层；device="cuda" 的 cuda 就是它
+kernel 核函数     发给 GPU 千核并行执行的一段计算程序（算子的硬件形态）
+FLOPS            每秒浮点运算次数 = 显卡的马力；T4 ≈ 65 TFLOPS（fp16）
+nvidia-smi       显卡的「任务管理器」命令，看占用/卡型</pre>
+  </div>
+  <p><strong>T4 是谁</strong>：NVIDIA 2018 年的卡，2560 核 + 16GB 显存，Colab/Kaggle 免费档的主力。它的 65 TFLOPS 意味着：理论上每秒 65 万亿次浮点运算——你 3-B 那一亿参数的实验在它面前是眨眼间的事。</p>
+
+  <h2 id="ch3-platform">3.1 双平台开工</h2>
+  <p>两个平台是<strong>独立配额</strong>，可以同时用（一个跑实验、一个读文档），合计预算远超单平台：</p>
+  <div class="tablewrap"><table>
+    <caption>表 3-1 · Colab（AI Pro）vs Kaggle</caption>
+    <thead><tr><th></th><th>Google Colab</th><th>Kaggle Notebooks</th></tr></thead>
+    <tbody>
+      <tr><td>配额</td><td>200 CCU/月（T4≈1.8/时 → ~110 小时）</td><td>30 GPU 时/<strong>周</strong>（免费，需手机验证）</td></tr>
+      <tr><td>GPU</td><td>T4 16GB（可遇 L4/A100，按点数计）</td><td>T4×2 16GB 或 P100 16GB</td></tr>
+      <tr><td>会话上限</td><td>~24h（无后台执行，训练时别关标签页）</td><td>~9-12h，关页即停</td></tr>
+      <tr><td>持久化</td><td>挂载 Google Drive</td><td>/kaggle/working（存成 Dataset 可复用）</td></tr>
+      <tr><td>联网开关</td><td>默认可联网</td><td><strong>Settings → Internet 需手动开</strong>（下载模型必需）</td></tr>
+      <tr><td>开工路径</td><td>代码执行程序 → 更改运行时类型 → T4 GPU</td><td>New Notebook → Settings → Accelerator: GPU T4 x2</td></tr>
+    </tbody>
+  </table></div>
+  <aside class="callout tip">
+    <p class="co-label">提示</p>
+    <p>本章练习用哪个平台都行，代码完全相同（Kaggle 双卡时我们只用 <code>cuda:0</code>）。首次开 Kaggle GPU 需手机验证；下载模型前记得开 Internet。练习底座模型统一为 <strong>Qwen3 系列</strong>（中文友好、Apache 2.0），从模块 2 的 0.6B 开始上真模型。</p>
+  </aside>
+
+  <h3 id="ch3-first-gpu">第一次开卡（逐步，英文 UI 标签）</h3>
+  <p><strong>新笔记本默认是 CPU，没有任何 GPU</strong>——每台笔记本都要手动切换，且只对当前会话生效（断线/重连后要重查）。菜单路径（英文界面）：</p>
+  <ol>
+    <li><strong>Colab</strong>：顶部菜单 <strong>Runtime → Change runtime type...</strong> → 对话框内 <strong>Hardware accelerator</strong> 下拉选 <strong>T4 GPU</strong> → <strong>Save</strong>；等右上角出现 RAM/磁盘图标（约半分钟）。若菜单栏被收起：右上 <strong>Connect ▾</strong> 里同样有 Change runtime type。</li>
+    <li><strong>Kaggle</strong>：New Notebook → 右侧 Settings → <strong>Accelerator: GPU T4 x2</strong>（首次需手机验证）→ <strong>Internet: On</strong>。</li>
+    <li><strong>验证</strong>：新建代码格运行 <code>!nvidia-smi</code>——看到 Tesla T4 与 ~15GB 显存表即成功。</li>
+  </ol>
+  <aside class="callout warning">
+    <p class="co-label">警告</p>
+    <p>GPU 会话开着就计费（T4≈1.8 点/时）。<strong>先在 CPU 会话把代码写好、最后再切 GPU 跑</strong>；用完 代码执行程序 → 断开连接。CPU 会话几乎免费（0.07 点/时），写代码/看文档用它。</p>
+  </aside>
+
+  <h2 id="ch3-api">3.2 测量三件套</h2>
+  <aside class="callout tip">
+    <p class="co-label">▶ 上机约定</p>
+    <p>带 <strong>▶</strong> 的代码块 = 在 T4 会话里新建单元格、意接粘贴运行。今日顺序：▶例 3-1（交 3-A）→ ▶例 3-2 补全（交 3-B）→ 练习 3-C 的循环（先预测再跑）。</p>
+  </aside>
+  <p>所有验证围绕三个 API（外加一个重置）：</p>
+  <div class="example">
+    <p class="ex-head">▶ 例 3-1 · 第一个要跑的格子：基线 + 一次分配的手算对照</p>
+<pre>import torch
+
+torch.cuda.init()
+print(torch.cuda.get_device_name(0))          # 确认卡型：Tesla T4
+print(f"基线 allocated: {torch.cuda.memory_allocated()/2**30:.2f} GB")   # ≈0
+
+a = torch.zeros(10**8, device="cuda")          # 1 亿个 fp32
+print(f"分配后 allocated: {torch.cuda.memory_allocated()/2**30:.2f} GB") # ？？
+del a; torch.cuda.empty_cache()</pre>
+  </div>
+  <p>手算：10⁸ 参数 × 4 字节 = 0.4×10⁹ 字节 = <strong>0.37 GB</strong>（10⁹ 字节按二进制 GiB 折算 ≈ 0.373GiB；换算尺给的是十进制 GB，读数差 7% 属正常）。<code>memory_allocated</code> 是 torch 视角的<strong>在用</strong>显存；<code>max_memory_allocated</code> 是历史峰值；<code>reset_peak_memory_stats()</code> 归零峰值刻度。</p>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答</p>
+    <p><strong>问：</strong>为什么 nvidia-smi 显示的占用比 memory_allocated 大？</p>
+    <p><strong>答：</strong>torch 有<strong>缓存分配器</strong>（caching allocator）：你 del 掉的张量，显存不立刻还给显卡，而是留在 torch 自己的池子里下次复用（省去反复向驱动申请的开销）。所以 nvidia-smi 看到「已预留」（reserved，含池子），memory_allocated 只算「在用」。排 OOM 时两个数都要看：allocated 高=真用得多；reserved 高而 allocated 低=池子碎片，<code>empty_cache()</code> 可释放（但它不是万能药，别在训练循环里频繁调用）。</p>
+  </aside>
+
+  <h2 id="ch3-verify">3.3 验证「训练态 = 权重 × 4」</h2>
+  <p>你在 2-A 推导过 16 字节/参数，现在用一亿个假参数在真卡上验它。关键背景：显存不是训练一开始就占满，而是<strong>分时刻出现</strong>——权重在创建时、梯度在 backward 时、动量（优化器状态）在首次 step 时——所以在三个时刻各读一次表。下面是完整注解版，直接复制运行（设计原则：例题必完整、逐行有来历；挑战只在练习里）：</p>
+  <div class="example">
+    <p class="ex-head">▶ 例 3-2 · 完整注解：三段增量测训练态</p>
+<pre>import torch
+
+p = torch.zeros(10**8, device="cuda", requires_grad=True)   # 一亿个假参数=权重
+opt = torch.optim.AdamW([p], lr=1e-3)      # 优化器：管 [p]，步长 lr；此刻未占显存
+
+base = torch.cuda.memory_allocated() / 2**30
+print("① 权重（创建时）:", round(base, 2), "GB")            # 预期 ≈0.37
+
+loss = p.sum()        # ①前向+②损失：一亿个数加成标量（最简 loss）
+loss.backward()       # ③反向：给每个参数算梯度（例 1-1 的同一调用）
+print("② 梯度（backward 时）:", round(torch.cuda.memory_allocated()/2**30, 2), "GB")
+
+opt.step()            # ④更新：首次真正动参数，顺手创建两份动量
+print("③ 动量（首次 step 时）:", round(torch.cuda.memory_allocated()/2**30, 2), "GB")</pre>
+  </div>
+  <p>预期：0.37（权重）→ 0.75（+梯度 0.37）→ <strong>1.49（+动量 0.75）≈ 0.37×4</strong>——第 2 章公式在真卡上兑现。</p>
+
+  <aside class="callout qa">
+    <p class="co-label">读者问答（教学事故 #3 存档）</p>
+    <p><strong>问：</strong>初版把例 3-2 做成挖空骨架，读者补不出？</p>
+    <p><strong>答：</strong>读者叫停得对——骨架用到的 <code>AdamW 构造/step/sum</code> 从未在正文教过，「你都见过」是假claim。教训升格：公式的逐前置链条检查推广到<strong>代码逐行</strong>——书中每行代码用到的 API，正文必须先数过；例题必完整，挑战只进练习。同型事故已三犯，列为改稿第一检查项。</p>
+  </aside>
+
+  <div class="exercise">
+    <p class="ex-head">练习 3-A · 基线与分配对照（直接跑下面这格，抄读数交卷）</p>
+<pre>import torch
+print(torch.cuda.get_device_name(0))                     # 应打印 Tesla T4
+print(f"基线: {torch.cuda.memory_allocated()/2**30:.2f} GB")
+a = torch.zeros(10**8, device="cuda")
+print(f"分配后: {torch.cuda.memory_allocated()/2**30:.2f} GB")  # 手算预期？
+del a; torch.cuda.empty_cache()</pre>
+    <ol>
+      <li>把两个读数与手算（0.37 GiB）对照，误差 <10% 即通过；顺便回答：你用的是 Colab 还是 Kaggle？</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改）</summary>
+    <p><strong>学生实测（2026-09-26，Colab T4）：</strong>Tesla T4；基线 0.00 GB；分配后 <strong>0.37 GB</strong></p>
+    <p><strong>批改：</strong>通过——与手算 10⁸×4 字节 ÷ 2³⁰ = 0.3725 GiB 精确一致，误差 0%。首次「纸面账本 vs 真卡读数」对质成功。</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 3-B · 训练态×4 实测（A 级：跑通 + 改一个数）</p>
+    <ol>
+      <li>复制 ▶例 3-2 完整版到 T4 会话，跑通，抄下三段读数。</li>
+      <li>把 <code>10**8</code> 改成 <code>10**7</code>，<strong>先用换算尺预测</strong>三段读数各变多少，再跑验证。</li>
+    </ol>
+    <details class="answer"><summary>答案（学生实测 · 已批改，含翻车实录）</summary>
+    <p><strong>第一轮（10⁸）：</strong>0.37 → 0.75 → 1.49，与 16 字节/参数法则精确一致，2-A 推导在真卡兑现。</p>
+    <p><strong>第二轮（改 10⁷ 未清场）：</strong>实测 0.78 / 0.07 / 0.15。破案：① = 旧权重 0.37 + 旧梯度 0.37（被旧 loss 的计算图拽着未释放）+ 新权重 0.04；② = <code>loss = p.sum()</code> 重绑定时旧图整体释放（-0.74）+ 新梯度（+0.04）的净额；③ 正常。<strong>三条教训：notebook 会话有记忆（改数重跑≠干净重跑）；计算图拽着显存（loss 多活一秒参数多占一秒）；数字对≠理解对（② 是两股大变动抵消的巧合）</strong>。清场代码（<strong>放进实验 cell 开头，实验之间也要清，不是只在新会话清一次</strong>——学生同型二犯实录）：<code>for name in ["p","opt","loss"]: globals().pop(name, None)</code> + <code>gc.collect(); torch.cuda.empty_cache()</code>。</p>
+    <p><strong>最终收官（10⁷ 干净复测）：</strong>0.04 / 0.07 / 0.15 ✓ 与换算尺预测一致，3-B 关闭。</p></details>
+  </div>
+
+  <div class="exercise">
+    <p class="ex-head">练习 3-C · OOM 演练（先预测再动手）</p>
+    <ol>
+      <li><strong>先手算</strong>：T4 16GB，循环里每次 <code>torch.zeros(10**9, device="cuda")</code>（fp32）并 append 进列表，第几次迭代会爆？</li>
+      <li>写下预测后跑：<pre>x = []
+for i in range(100):
+    x.append(torch.zeros(10**9, device="cuda"))
+    print(i, f"{torch.cuda.memory_allocated()/2**30:.2f} GB")</pre></li>
+      <li>读报错：<code>CUDA out of memory</code> 那行里 "Tried to allocate ..." 告诉你什么？和你的预测差几次迭代？为什么（提示：显存里还有谁）？</li>
+      <li>修复：改成「用完即弃」（不 append，每轮覆盖同一变量），再跑通 100 轮。</li>
+    </ol>
+    <details class="answer"><summary>答案（已批改 · 含前传实录）</summary>
+    <p><strong>循环题答案：</strong>每块 3.73 GiB、可用约 14.4 GiB → <strong>第 4 次分配（i=3）爆</strong>，列表已躺 3 块=11.19 GiB；遗言 "Tried to allocate 3.73 GiB" 即第 4 块。粗糙预测 16÷3.7≈4.3 会误判能塞 4 块——卡实际可用 14.56 GiB（十进制 16GB=14.9 GiB 再扣驱动）。修复：append 改每轮覆盖 <code>x = torch.zeros(...)</code>（旧引用被替换即释放，进缓存池复用）→ 100 轮畅通。</p>
+    <p><strong>意外前传（2026-09-26）：</strong>学生把例 3-2 改成 10⁹ 参数版，训练态×4 实验自己爆在 <code>opt.step()</code>——爆点=动量到账时刻，验证 3.0 时机直觉。遗言解读：Tried to allocate 3.73 GiB＝第二份动量；in-use 11.18＝3.73×3 精确对账；「16GB 卡」实际可用 14.56 GiB（十进制 16 GB＝14.9 GiB 再扣驱动）——<strong>单位差在生死线咬人：需求 14.9 vs 可用 14.56</strong>。预判教训：10⁹ 全参训练态＝14.9 GiB &gt; 可用，跑之前就该判死刑——账本的意义即免点火而知炸。</p></details>
+  </div>
+
+  <section class="summary">
+    <h2>本章小结</h2>
+    <ul>
+      <li>测量三件套：memory_allocated / max_memory_allocated / reset_peak_memory_stats；nvidia-smi 看到 reserved（含缓存池）</li>
+      <li>例 3-1/3-2 在真卡兑现了第 2 章公式：分配=参数×精度字节，训练态=权重×4</li>
+      <li>OOM 报错的 "Tried to allocate" 是遗言不是废话：它给出爆点时刻申请的大小与当时占用</li>
+      <li>双平台预算：Colab 200 点/月 + Kaggle 30 GPU 时/周，独立不冲突</li>
+    </ul>
+  </section>
+
+  <dl class="vocab">
+    <dt>算子 operator（op）</dt><dd>对张量的一次计算（@、sum、backward…），背后是 GPU 核函数；与「造张量」（分配内存如 torch.zeros）相对，是计算图的节点</dd>
+    <dt>caching allocator</dt><dd>torch 的显存池：释放的张量留在池内复用，reserved ≥ allocated</dd>
+    <dt>reserved / allocated</dt><dd>nvidia-smi 口径（含池）/ torch 口径（在用）的两种显存读数</dd>
+    <dt>peak memory</dt><dd>max_memory_allocated 记录的历史峰值——比终值更能暴露瞬时爆点</dd>
+    <dt>CUDA OOM</dt><dd>显存耗尽的运行时错误；报错含申请大小与当前占用，是排障第一线索</dd>
+  </dl>
+</section>
