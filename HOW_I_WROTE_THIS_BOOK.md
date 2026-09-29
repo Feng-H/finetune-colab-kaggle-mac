@@ -2,7 +2,7 @@
 
 > **作者**：[Feng-H (https://github.com/Feng-H)](https://github.com/Feng-H)  
 > **项目**：《通过 Google Colab / Kaggle 学习模型微调》  
-> **配套开源书**：[https://github.com/Feng-H/finetune-colab-mac](https://github.com/Feng-H/finetune-colab-mac)
+> **配套开源书**：[https://github.com/Feng-H/finetune-colab-kaggle-mac](https://github.com/Feng-H/finetune-colab-kaggle-mac)
 
 ---
 

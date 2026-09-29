@@ -1,14 +1,14 @@
 # 《通过 Google Colab / Kaggle 学习模型微调》
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub Pages](https://img.shields.io/badge/Online_Book-GitHub_Pages-blue)](https://feng-h.github.io/finetune-colab-mac/)
+[![GitHub Pages](https://img.shields.io/badge/Online_Book-GitHub_Pages-blue)](https://feng-h.github.io/finetune-colab-kaggle-mac/)
 [![Target Device: M1 8GB](https://img.shields.io/badge/Target_Device-MacBook_Air_M1_8G-00b57a)](https://apple.com)
 [![Base Model: Qwen3-4B](https://img.shields.io/badge/Base_Model-Qwen3--4B--Q4_K_M-purple)](https://huggingface.co/Qwen)
 
 > **一本以最普及的 MacBook Air M1（8G 统一内存）为物理验收标尺的工业级微调实战专著。**  
 > 打通免费云端 GPU（Google Colab / Kaggle）科学炼丹、早停截断、显存拔插同台盲测，到 GGUF 压制与端侧纯离线私有化交付全链路。
 
-📖 **[在线全屏翻阅精装书 (GitHub Pages 直读) ➔](https://feng-h.github.io/finetune-colab-mac/)**  
+📖 **[在线全屏翻阅精装书 (GitHub Pages 直读) ➔](https://feng-h.github.io/finetune-colab-kaggle-mac/)**  
 📝 **[特别说明：我是如何与 AI 共同写出这本书的？(人机协作认知范式) ➔](./HOW_I_WROTE_THIS_BOOK.md)**
 
 ---
