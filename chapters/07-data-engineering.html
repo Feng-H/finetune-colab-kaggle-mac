@@ -41,7 +41,7 @@
     <figcaption>图 6-0 · 工业级数据工程流水线全景传送带</figcaption>
   </figure>
 
-  <h2 id="ch6-lifecycle">6.1 一条数据的生命周期：从脏 JSON 到张量</h2>
+  <h2 id="ch6-lifecycle">7.1 一条数据的生命周期：从脏 JSON 到张量</h2>
   <p>在第 7 章中，我们为了快速看到模型开口说“叮！”，走了一条极简的野路子：在 Python 里用反引号字符串拼接，把问题和答案一股脑塞给模型。这在教学初体验时很爽，但在真实项目中，这种做法会引发灾难：</p>
   <ol>
     <li>只要真实用户追问第二句话，你的模型就会当场“失忆”，因为它从没学过怎么处理多轮上下文。</li>
@@ -49,7 +49,7 @@
   </ol>
   <p>工业级数据工程的核心，就是建立一条<strong>确定性的清洗与编译流水线</strong>。接下来，我们将用一条真实世界的客服会话数据作为案例，全程追踪它在这条流水线上的每一步蜕变。</p>
 
-  <h2 id="ch6-formats">6.2 规范与套版：Alpaca 到 Messages，再到 ChatML</h2>
+  <h2 id="ch6-formats">7.2 规范与套版：Alpaca 到 Messages，再到 ChatML</h2>
 
   <h3>1. 格式对比：为什么扁平 Alpaca 必被淘汰？</h3>
   <aside class="callout note">
@@ -122,7 +122,7 @@ print(formatted_text)</pre>
     <li>每一句话的尾部都被套上了 <code>&lt;|im_end|&gt;\n</code>。上一章我们学到的曲终记号 <strong>EOS（End Of Sequence）</strong>，在 Qwen 中就是这个 <code>&lt;|im_end|&gt;</code>！</li>
   </ul>
 
-  <h2 id="ch6-cleaning">6.3 净化手术：真实工业界的防翻车清洗流水线</h2>
+  <h2 id="ch6-cleaning">7.3 净化手术：真实工业界的防翻车清洗流水线</h2>
   <p>很多人以为清洗数据就是删掉空行，但在微调大模型时，有三大“隐形炸弹”必须逐一拆除：</p>
 
   <h3>炸弹 1：断头截断事故（Truncation Disaster）</h3>
@@ -184,7 +184,7 @@ valid_msg, info = clean_messages_pipeline(raw_record["messages"], tokenizer)
 print(f"清洗结果: {'通过' if valid_msg else '剔除'}, 详情: {info}")</pre>
   </div>
 
-  <h2 id="ch6-masking">6.4 训练盲区破解：只对答案算 Loss（Loss Masking）</h2>
+  <h2 id="ch6-masking">7.4 训练盲区破解：只对答案算 Loss（Loss Masking）</h2>
 
   <aside class="callout note">
     <p class="co-label">从生活直觉切入：驾校练倒车入库，考官会考核教练口令吗？</p>
@@ -231,7 +231,7 @@ trainer = train_on_responses_only(
 # 都会在底层被打上 -100 标签，考题彻底免检！</pre>
   </div>
 
-  <h2 id="ch6-split">6.5 考卷分配：Train / Val 切分与过拟合监控</h2>
+  <h2 id="ch6-split">7.5 考卷分配：Train / Val 切分与过拟合监控</h2>
   <p>流水线的最后一环是分配考卷：绝对不能把手头的所有数据都拿去训练！</p>
   <p>必须保留 10% ~ 20% 的数据作为<strong>验证集（Validation Set）</strong>——这是模型在训练期间<strong>绝对不能偷看</strong>的考卷。</p>
 

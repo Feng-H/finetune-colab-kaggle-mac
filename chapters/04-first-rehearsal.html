@@ -224,7 +224,7 @@ with model.disable_adapter():            # 拔掉踏板看原乐队——同会�
     <details class="answer"><summary>答案（待学生完成后补入）</summary></details>
   </div>
 
-    <h2 id="ch04-bypass-switch">4.5 踏板的硬件旁通（Bypass）：<code>disable_adapter()</code> 一秒切回原生清音</h2>
+    <h2 id="ch04-bypass-switch">4.8 踏板的硬件旁通（Bypass）：<code>disable_adapter()</code> 一秒切回原生清音</h2>
   <p>在现实的舞台上，吉他手踩下效果器踏板时，声音会变成轰鸣的失真音；当他再踩一脚开启<strong>“硬件旁通（True Bypass）”</strong>时，信号就会完全绕过内部电路，原汁原味地吐出吉他本身的清音。</p>
   <p>在 LoRA 中，Hugging Face PEFT 库同样为我们提供了这个“瞬间旁通开关”——<strong><code>with model.disable_adapter():</code></strong> 上下文管理器！</p>
 

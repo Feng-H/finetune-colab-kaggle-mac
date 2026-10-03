@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>finetune-colab</title>
+<title>finetune-colab-kaggle-mac</title>
 <style>
 /* course-book · 经典版画风格技术书排版 + 打印规则
  * 类目契约见 SKILL.md；颜色体系：暖白纸面 + 锈红强调 + 沙色代码底
@@ -1177,7 +1177,7 @@ body.paged-mode .a4-page.active-page {
 </head>
 <body>
 <div class="book">
-<p class="build-bar">built 2026-09-29 · course-book</p>
+<p class="build-bar">built 2026-10-03 · course-book</p>
 <nav class="book-nav" id="book-nav"><h2 class="book-nav-title">目录树导航</h2><ul class="nav-tree">
 <li class="nav-module-title">模块 0 · 地基奠定：模型排练的底层循环</li>
 <li class="nav-chapter-item"><a href="#ch1">第 1 章 · 训练的本质：一支乐队和一场排练</a></li>
@@ -1296,7 +1296,7 @@ body.paged-mode .a4-page.active-page {
 <li class="toc-sub"><a href="#ch1-backward"><span class="toc-title">1.5 反向：链式法则的自动化（含手算三招）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 <li class="toc-sub"><a href="#ch1-update"><span class="toc-title">1.6 更新：学习率与下山</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 <li class="toc-sub"><a href="#ch1-finetune"><span class="toc-title">1.7 微调与推理：照你的曲目集排练</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch1"><span class="toc-title">读者问答辑录（学习史存档）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch1-qa"><span class="toc-title">读者问答辑录（学习史存档）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 </ul></li>
 </ol></li>
 <li class="toc-module"><div class="toc-module-header">模块 1 · 显存数学：显存账本与真卡实测</div><ol class="toc-chapter-list">
@@ -1323,7 +1323,7 @@ body.paged-mode .a4-page.active-page {
 <li class="toc-sub"><a href="#ch4-train"><span class="toc-title">4.5 ▶ 第五步：训练（排练）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 <li class="toc-sub"><a href="#ch4-infer"><span class="toc-title">4.6 ▶ 第六步：推理对比（试演）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 <li class="toc-sub"><a href="#ch4-trouble"><span class="toc-title">4.7 已知坑排障卡</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch04-bypass-switch"><span class="toc-title">4.5 踏板的硬件旁通（Bypass）：disable_adapter() 一秒切回原生清音</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch04-bypass-switch"><span class="toc-title">4.8 踏板的硬件旁通（Bypass）：disable_adapter() 一秒切回原生清音</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 </ul></li>
 <li class="toc-chapter"><a href="#ch5"><span class="toc-title">第 5 章 · 收敛诊断：读懂曲线、留住进度、焊死踏板</span><span class="toc-leader"></span><span class="toc-page"></span></a><ul class="toc-sublist">
 <li class="toc-sub"><a href="#ch5-loss"><span class="toc-title">5.1 按住往下滑：loss 曲线深读</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
@@ -1339,33 +1339,33 @@ body.paged-mode .a4-page.active-page {
 <li class="toc-sub"><a href="#ch6-how-to-write"><span class="toc-title">6.4 如何编写微调级的 System Prompt？（模型宪法三要素）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 </ul></li>
 <li class="toc-chapter"><a href="#ch7"><span class="toc-title">第 7 章 · 工业级数据工程：清洗、套版与 Loss Masking</span><span class="toc-leader"></span><span class="toc-page"></span></a><ul class="toc-sublist">
-<li class="toc-sub"><a href="#ch6-lifecycle"><span class="toc-title">6.1 一条数据的生命周期：从脏 JSON 到张量</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch6-formats"><span class="toc-title">6.2 规范与套版：Alpaca 到 Messages，再到 ChatML</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch6-cleaning"><span class="toc-title">6.3 净化手术：真实工业界的防翻车清洗流水线</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch6-masking"><span class="toc-title">6.4 训练盲区破解：只对答案算 Loss（Loss Masking）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch6-split"><span class="toc-title">6.5 考卷分配：Train / Val 切分与过拟合监控</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch6-lifecycle"><span class="toc-title">7.1 一条数据的生命周期：从脏 JSON 到张量</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch6-formats"><span class="toc-title">7.2 规范与套版：Alpaca 到 Messages，再到 ChatML</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch6-cleaning"><span class="toc-title">7.3 净化手术：真实工业界的防翻车清洗流水线</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch6-masking"><span class="toc-title">7.4 训练盲区破解：只对答案算 Loss（Loss Masking）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch6-split"><span class="toc-title">7.5 考卷分配：Train / Val 切分与过拟合监控</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 </ul></li>
 <li class="toc-chapter"><a href="#ch8"><span class="toc-title">第 8 章 · Hugging Face 黄金图鉴：领域图谱、选型排雷与探查</span><span class="toc-leader"></span><span class="toc-page"></span></a><ul class="toc-sublist">
-<li class="toc-sub"><a href="#ch7-landscape"><span class="toc-title">7.1 为什么微调算法是死招，选对数据是活水？</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch7-domains"><span class="toc-title">7.2 全领域黄金数据集图鉴</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch7-landmines"><span class="toc-title">7.3 选型三大陷阱：商业合规、数据污染与机翻劣质</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch7-streaming"><span class="toc-title">7.4 工业实战：用 streaming=True 秒级探查亿级数据集</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch7-rag-vs-sft"><span class="toc-title">7.5 灵魂之问：微调学招式，那事实知识从哪来？</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch7-landscape"><span class="toc-title">8.1 为什么微调算法是死招，选对数据是活水？</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch7-domains"><span class="toc-title">8.2 全领域黄金数据集图鉴</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch7-landmines"><span class="toc-title">8.3 选型三大陷阱：商业合规、数据污染与机翻劣质</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch7-streaming"><span class="toc-title">8.4 工业实战：用 streaming=True 秒级探查亿级数据集</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch7-rag-vs-sft"><span class="toc-title">8.5 灵魂之问：微调学招式，那事实知识从哪来？</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 </ul></li>
 </ol></li>
 <li class="toc-module"><div class="toc-module-header">模块 4 · 科学调参：告别玄学炼丹</div><ol class="toc-chapter-list">
 <li class="toc-chapter"><a href="#ch9"><span class="toc-title">第 9 章 · 超参三剑客：学习率、有效批次与自动化评估</span><span class="toc-leader"></span><span class="toc-page"></span></a><ul class="toc-sublist">
-<li class="toc-sub"><a href="#ch8-earlystopping"><span class="toc-title">8.1 接续悬念：在巅峰自动刹车的「早停机制」</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch8-triad"><span class="toc-title">8.2 掌控训练节奏：超参三剑客</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch8-evaluation"><span class="toc-title">8.3 评估维度跃迁：跨越 Loss 盲区</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch8-earlystopping"><span class="toc-title">9.1 接续悬念：在巅峰自动刹车的「早停机制」</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch8-triad"><span class="toc-title">9.2 掌控训练节奏：超参三剑客</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch8-evaluation"><span class="toc-title">9.3 评估维度跃迁：跨越 Loss 盲区</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 </ul></li>
 </ol></li>
 <li class="toc-module"><div class="toc-module-header">模块 5 · 上量部署：高并发架构与端侧 Cookbook</div><ol class="toc-chapter-list">
 <li class="toc-chapter"><a href="#ch10"><span class="toc-title">第 10 章 · 部署架构：模型合并、4-bit GGUF 量化与并发</span><span class="toc-leader"></span><span class="toc-page"></span></a><ul class="toc-sublist">
-<li class="toc-sub"><a href="#ch9-merge"><span class="toc-title">9.1 踏板焊死：LoRA Merge 的本质与实操</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch9-quantization"><span class="toc-title">9.2 压缩的艺术：从 16bit 到 4bit GGUF 量化</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch9-ollama"><span class="toc-title">9.3 边缘离线交付：Ollama + GGUF 一键上云上端</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch9-cloud-engines"><span class="toc-title">9.4 云端高并发双雄：vLLM（企业航母）与 SGLang（智能体新贵）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch9-merge"><span class="toc-title">10.1 踏板焊死：LoRA Merge 的本质与实操</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch9-quantization"><span class="toc-title">10.2 压缩的艺术：从 16bit 到 4bit GGUF 量化</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch9-ollama"><span class="toc-title">10.3 边缘离线交付：Ollama + GGUF 一键上云上端</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch9-cloud-engines"><span class="toc-title">10.4 云端高并发双雄：vLLM（企业航母）与 SGLang（智能体新贵）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 </ul></li>
 <li class="toc-chapter"><a href="#ch11"><span class="toc-title">第 11 章 · 8G M1 Mac 专属实战：打造私密离线亲子家庭教育顾问</span><span class="toc-leader"></span><span class="toc-page"></span></a><ul class="toc-sublist">
 <li class="toc-sub"><a href="#ch11-why-parenting"><span class="toc-title">11.1 为什么亲子家庭领域必须在本地跑？</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
@@ -1380,7 +1380,7 @@ body.paged-mode .a4-page.active-page {
 <li class="toc-module"><div class="toc-module-header">模块 6 · 终局之战：毕业大项目生产级交付</div><ol class="toc-chapter-list">
 <li class="toc-chapter"><a href="#ch12"><span class="toc-title">第 12 章 · 亲子教育私密顾问：从实验原型到家庭级生产交付</span><span class="toc-leader"></span><span class="toc-page"></span></a><ul class="toc-sublist">
 <li class="toc-sub"><a href="#ch12-kaggle-dual-gpu"><span class="toc-title">12.1 决战 Kaggle：双卡 GPU T4 x 2 硬件实操与避坑指南</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
-<li class="toc-sub"><a href="#ch12"><span class="toc-title">12.2 毕业项目 Kaggle 全套自包含流水线脚本（一键贯通）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
+<li class="toc-sub"><a href="#ch12-pipeline"><span class="toc-title">12.2 毕业项目 Kaggle 全套自包含流水线脚本（一键贯通）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 <li class="toc-sub"><a href="#ch12-loss-limits-theory"><span class="toc-title">12.3 硬核解密：如何预判微调损失的「理论物理极值」（别再对着曲线猜迷）</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 <li class="toc-sub"><a href="#ch12-actual-run-deepdive"><span class="toc-title">12.4 Kaggle 实测日志全景复盘：预测与实测的完美闭环</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
 <li class="toc-sub"><a href="#ch12-llm-judge-results"><span class="toc-title">12.5 LLM-as-a-Judge 盲测实录：3:0 完胜与思维链截断真相</span><span class="toc-leader"></span><span class="toc-page"></span></a></li>
@@ -1641,7 +1641,7 @@ print(x.grad)   # ？？（先手算，再运行验证）</pre>
   </dl>
 
   <section class="qa-log">
-    <h2>读者问答辑录（学习史存档）</h2>
+    <h2 id="ch1-qa">读者问答辑录（学习史存档）</h2>
     <p>以下是 2026-09-25 学习过程中的真实问答，正文已吸收其养分，此处留档：</p>
     <dl>
       <dt>Unsloth 是什么？是 LoRA 的底层框架吗？</dt><dd>都不是——专有名词：unsloth.ai 的微调加速库。分层：LoRA=数学方法，Hugging Face PEFT=官方实现，Unsloth=压在实现之下的加速引擎（手写 Triton kernel，API 不变约 2 倍速）。查字典对不上的「英文词」先怀疑是品牌名。</dd>
@@ -2217,7 +2217,7 @@ with model.disable_adapter():            # 拔掉踏板看原乐队——同会�
     <details class="answer"><summary>答案（待学生完成后补入）</summary></details>
   </div>
 
-    <h2 id="ch04-bypass-switch">4.5 踏板的硬件旁通（Bypass）：<code>disable_adapter()</code> 一秒切回原生清音</h2>
+    <h2 id="ch04-bypass-switch">4.8 踏板的硬件旁通（Bypass）：<code>disable_adapter()</code> 一秒切回原生清音</h2>
   <p>在现实的舞台上，吉他手踩下效果器踏板时，声音会变成轰鸣的失真音；当他再踩一脚开启<strong>“硬件旁通（True Bypass）”</strong>时，信号就会完全绕过内部电路，原汁原味地吐出吉他本身的清音。</p>
   <p>在 LoRA 中，Hugging Face PEFT 库同样为我们提供了这个“瞬间旁通开关”——<strong><code>with model.disable_adapter():</code></strong> 上下文管理器！</p>
 
@@ -2902,7 +2902,7 @@ plt.title("Rank sweep: loss curves"); plt.show()</pre>
     <figcaption>图 6-0 · 工业级数据工程流水线全景传送带</figcaption>
   </figure>
 
-  <h2 id="ch6-lifecycle">6.1 一条数据的生命周期：从脏 JSON 到张量</h2>
+  <h2 id="ch6-lifecycle">7.1 一条数据的生命周期：从脏 JSON 到张量</h2>
   <p>在第 7 章中，我们为了快速看到模型开口说“叮！”，走了一条极简的野路子：在 Python 里用反引号字符串拼接，把问题和答案一股脑塞给模型。这在教学初体验时很爽，但在真实项目中，这种做法会引发灾难：</p>
   <ol>
     <li>只要真实用户追问第二句话，你的模型就会当场“失忆”，因为它从没学过怎么处理多轮上下文。</li>
@@ -2910,7 +2910,7 @@ plt.title("Rank sweep: loss curves"); plt.show()</pre>
   </ol>
   <p>工业级数据工程的核心，就是建立一条<strong>确定性的清洗与编译流水线</strong>。接下来，我们将用一条真实世界的客服会话数据作为案例，全程追踪它在这条流水线上的每一步蜕变。</p>
 
-  <h2 id="ch6-formats">6.2 规范与套版：Alpaca 到 Messages，再到 ChatML</h2>
+  <h2 id="ch6-formats">7.2 规范与套版：Alpaca 到 Messages，再到 ChatML</h2>
 
   <h3>1. 格式对比：为什么扁平 Alpaca 必被淘汰？</h3>
   <aside class="callout note">
@@ -2983,7 +2983,7 @@ print(formatted_text)</pre>
     <li>每一句话的尾部都被套上了 <code>&lt;|im_end|&gt;\n</code>。上一章我们学到的曲终记号 <strong>EOS（End Of Sequence）</strong>，在 Qwen 中就是这个 <code>&lt;|im_end|&gt;</code>！</li>
   </ul>
 
-  <h2 id="ch6-cleaning">6.3 净化手术：真实工业界的防翻车清洗流水线</h2>
+  <h2 id="ch6-cleaning">7.3 净化手术：真实工业界的防翻车清洗流水线</h2>
   <p>很多人以为清洗数据就是删掉空行，但在微调大模型时，有三大“隐形炸弹”必须逐一拆除：</p>
 
   <h3>炸弹 1：断头截断事故（Truncation Disaster）</h3>
@@ -3045,7 +3045,7 @@ valid_msg, info = clean_messages_pipeline(raw_record["messages"], tokenizer)
 print(f"清洗结果: {'通过' if valid_msg else '剔除'}, 详情: {info}")</pre>
   </div>
 
-  <h2 id="ch6-masking">6.4 训练盲区破解：只对答案算 Loss（Loss Masking）</h2>
+  <h2 id="ch6-masking">7.4 训练盲区破解：只对答案算 Loss（Loss Masking）</h2>
 
   <aside class="callout note">
     <p class="co-label">从生活直觉切入：驾校练倒车入库，考官会考核教练口令吗？</p>
@@ -3092,7 +3092,7 @@ trainer = train_on_responses_only(
 # 都会在底层被打上 -100 标签，考题彻底免检！</pre>
   </div>
 
-  <h2 id="ch6-split">6.5 考卷分配：Train / Val 切分与过拟合监控</h2>
+  <h2 id="ch6-split">7.5 考卷分配：Train / Val 切分与过拟合监控</h2>
   <p>流水线的最后一环是分配考卷：绝对不能把手头的所有数据都拿去训练！</p>
   <p>必须保留 10% ~ 20% 的数据作为<strong>验证集（Validation Set）</strong>——这是模型在训练期间<strong>绝对不能偷看</strong>的考卷。</p>
 
@@ -3415,12 +3415,12 @@ trainer.train()</pre>
     </ul>
   </aside>
 
-  <h2 id="ch7-landscape">7.1 为什么微调算法是死招，选对数据是活水？</h2>
+  <h2 id="ch7-landscape">8.1 为什么微调算法是死招，选对数据是活水？</h2>
   <p>工业界有一句残酷但真实的共识：<strong>“微调的三板斧（LoRA + SFTTrainer + Cosine 退火）任何初级工程师半天就能配好；但商业模型能不能打赢竞品，95% 取决于你给它喂了什么品质的语料。”</strong></p>
   <p>很多初学者容易陷入一个误区：从网上随便抓一个带“dataset”字样的文件就往模型里倒。在上一节我们分析过，像 Kaggle 或一些 GitHub 仓库里公开的 <strong>CSV 表格、统计调查、调查问卷</strong>，根本不是给大模型做指令微调（SFT）准备的。</p>
   <p>真正被现代大语言模型广泛认可的优质微调数据，几乎 100% 汇聚在 <strong>Hugging Face Datasets 社区</strong>（也就是我们在第 8 章约定的“音乐大市场”里的数据集专区）。在这个拥有数十万数据集的宝库中，到底哪些才是被验证过的“黄金富矿”？</p>
 
-  <h2 id="ch7-domains">7.2 全领域黄金数据集图鉴</h2>
+  <h2 id="ch7-domains">8.2 全领域黄金数据集图鉴</h2>
 
   <figure class="figure">
     <pre>
@@ -3629,7 +3629,7 @@ trainer.train()</pre>
     </ul>
   </aside>
 
-  <h2 id="ch7-landmines">7.3 选型三大陷阱：商业合规、数据污染与机翻劣质</h2>
+  <h2 id="ch7-landmines">8.3 选型三大陷阱：商业合规、数据污染与机翻劣质</h2>
   <p>在 Hugging Face 找数据，看似像逛超市一样自由，但如果不懂排雷，一脚踩中可能导致整个项目推倒重来，甚至引发法律纠纷：</p>
 
   <h3>陷阱 1：商业授权黑洞（License 炸弹）</h3>
@@ -3651,7 +3651,7 @@ trainer.train()</pre>
   <h3>陷阱 3：廉价机翻腔与文化错位</h3>
   <p>早期很多开源中文数据，是用 Google 翻译硬把英文数据翻成中文的。里面充斥着：<em>“这听起来像是一块蛋糕（Piece of cake，实际意为小菜一碟）”</em>，或者硬把美国棒球术语直译过来。这种数据喂给模型，模型会染上一身古怪的“机翻译制腔”，在中文用户面前表现得极其僵硬生硬。</p>
 
-  <h2 id="ch7-streaming">7.4 工业实战：用 streaming=True 秒级探查亿级数据集</h2>
+  <h2 id="ch7-streaming">8.4 工业实战：用 streaming=True 秒级探查亿级数据集</h2>
   <p>当你看到一个体积高达 80GB 的数据集（比如包含 100 万条对话的巨无霸），难道你必须花几个小时把它全部下载到本地或 Colab 才能看到它的庐山真面目吗？</p>
   <p><strong>绝对不用！现代数据工程师的利刃是：流式加载（Streaming Mode）。</strong></p>
 
@@ -3680,7 +3680,7 @@ for i in range(2):
     print(f"首句角色: {first_msg['role']}, 文本前 100 字: {first_msg['content'][:100]}...")</pre>
   </div>
 
-  <h2 id="ch7-rag-vs-sft">7.5 灵魂之问：微调学招式，那事实知识从哪来？</h2>
+  <h2 id="ch7-rag-vs-sft">8.5 灵魂之问：微调学招式，那事实知识从哪来？</h2>
   
   <aside class="callout note">
     <p class="co-label">读者深刻发问：微调只是让模型模仿风格，如果模型本身不知道答案怎么办？</p>
@@ -3801,7 +3801,7 @@ for k, v in sample.items():
       </li>
       <li><strong>专业度与合规语气（微调的真正价值）</strong>：
         注意医生回答的第一句话：<em>“注意：同种药品可由于不同的包装规格有不同的用法或用量。本文只供参考。如果不确定，请参看药品随带的说明书或向医生询问。”</em><br>
-        这种<strong>极度严谨的免责前置声明与安全用药语气</strong>，正是我们在 7.5 节讲的“微调学招式与职业素养”的最佳实证——微调不是让模型瞎猜药量，而是让模型染上一位专业临床执业医生的严谨表达习惯！
+        这种<strong>极度严谨的免责前置声明与安全用药语气</strong>，正是我们在 8.5 节讲的“微调学招式与职业素养”的最佳实证——微调不是让模型瞎猜药量，而是让模型染上一位专业临床执业医生的严谨表达习惯！
       </li>
     </ul>
     </details>
@@ -3852,7 +3852,7 @@ for k, v in sample.items():
     </ul>
   </aside>
 
-  <h2 id="ch8-earlystopping">8.1 接续悬念：在巅峰自动刹车的「早停机制」</h2>
+  <h2 id="ch8-earlystopping">9.1 接续悬念：在巅峰自动刹车的「早停机制」</h2>
   <p>回顾你在第 9 章练习 6-B 中跑出的这组震撼数据：</p>
   <ul>
     <li>第 20 步：Val Loss = 2.235</li>
@@ -3928,7 +3928,7 @@ trainer = SFTTrainer(
     </ul>
   </aside>
 
-  <h2 id="ch8-triad">8.2 掌控训练节奏：超参三剑客</h2>
+  <h2 id="ch8-triad">9.2 掌控训练节奏：超参三剑客</h2>
   <p>很多新手调参靠猜，被戏称为「玄学炼丹」。其实，大模型训练动力学中最核心的三个旋钮有着极其清晰的因果逻辑：</p>
 
   <figure class="figure">
@@ -4004,7 +4004,7 @@ trainer = SFTTrainer(
 )</pre>
   </div>
 
-  <h2 id="ch8-evaluation">8.3 评估维度跃迁：跨越 Loss 盲区</h2>
+  <h2 id="ch8-evaluation">9.3 评估维度跃迁：跨越 Loss 盲区</h2>
   <p>在第 9 章中，我们靠 <code>Validation Loss</code> 成功抓到了过拟合。但随着你走进真实工业场景，你必须明白一个事实：</p>
   <p><strong>Validation Loss 最低，绝对不代表模型在业务上最聪明！</strong></p>
 
@@ -4446,7 +4446,7 @@ print(f"最佳 Checkpoint 路径: {trainer.state.best_model_checkpoint}")</pre>
     <figcaption>图 9-0 · 现代大模型三大主流推理引擎（llama.cpp / vLLM / SGLang）的生态分工版图</figcaption>
   </figure>
 
-  <h2 id="ch9-merge">9.1 踏板焊死：LoRA Merge 的本质与实操</h2>
+  <h2 id="ch9-merge">10.1 踏板焊死：LoRA Merge 的本质与实操</h2>
   <p>在第 10 章和第 10 章中，我们反复强化过一个概念：<strong>LoRA 只是挂在底座上的外置效果器踏板</strong>。我们在训练时，底座权重 <i>W</i><sub>0</sub> 始终被冻结，我们只训练了低秩矩阵 <i>A</i> 和 <i>B</i>（也就是几十 MB 的 <code>adapter_model.safetensors</code>）。</p>
   <p>但在最终交付给用户或者部署到服务器时，如果依然保留“底座 + 外挂踏板”的形态，会带来严重的生产缺陷：</p>
   <ol>
@@ -4486,7 +4486,7 @@ model.save_pretrained_merged(
 print(f"合并完成！产物已存入: {merged_dir}")</pre>
   </div>
 
-  <h2 id="ch9-quantization">9.2 压缩的艺术：从 16bit 到 4bit GGUF 量化</h2>
+  <h2 id="ch9-quantization">10.2 压缩的艺术：从 16bit 到 4bit GGUF 量化</h2>
   <p>当执行完 Merge 之后，如果你查看导出的目录大小，一个 Qwen3-0.6B 的 16-bit 模型大约占用 <strong>1.2GB</strong> 的硬盘与内存；如果微调的是 7B/8B 模型，16-bit 权重将高达 <strong>15GB~16GB</strong>！</p>
   <p>回到我们在第 10 章学过的显存数学公式：</p>
   <p style="text-align: center; font-style: italic; color: #8a8272;">
@@ -4550,7 +4550,7 @@ print(f"合并完成！产物已存入: {merged_dir}")</pre>
     </table>
   </div>
 
-  <h2 id="ch9-ollama">9.3 边缘离线交付：Ollama + GGUF 一键上云上端</h2>
+  <h2 id="ch9-ollama">10.3 边缘离线交付：Ollama + GGUF 一键上云上端</h2>
   <p>如果你想把微调好的模型交给前端同事、测试人员、或者部署到客户没有昂贵 GPU 的普通办公电脑上，<strong>Ollama 是目前全球最受欢迎的终极交付工具</strong>。</p>
 
   <h3>为什么选择 Ollama？</h3>
@@ -4678,7 +4678,7 @@ ollama create my-qwen3 -f Modelfile
 # 2. 随时随地与你自己微调出的模型对话！
 ollama run my-qwen3</code></pre>
 
-  <h2 id="ch9-cloud-engines">9.4 云端高并发双雄：vLLM（企业航母）与 SGLang（智能体新贵）</h2>
+  <h2 id="ch9-cloud-engines">10.4 云端高并发双雄：vLLM（企业航母）与 SGLang（智能体新贵）</h2>
   <p>当模型走出开发者的个人电脑、迈向对外开放的商业级生产服务时，单兵工具 Ollama / llama.cpp 就不再适用了。在面对每秒几十上百个并发请求时，如果你写一个 FastAPI 接口直接调用 Hugging Face 的 <code>model.generate()</code>，服务在第 5 个人接入时就会当场 OOM 崩溃！</p>
   <p>要在云端 GPU 服务器上榨干算力、支撑高吞吐低延迟的商业 API，现代大模型工程界形成了两座巍峨的高峰：<strong>工业底盘事实标准 vLLM</strong>，以及<strong>专为复杂智能体而生的极速新贵 SGLang</strong>。它们与端侧的 <strong>llama.cpp</strong> 一同构成了现代大模型推理部署的「三足鼎立」格局。</p>
 
@@ -5561,7 +5561,7 @@ ollama run parenting-ai</code></pre>
     </table>
   </div>
 
-  <h2>12.2 毕业项目 Kaggle 全套自包含流水线脚本（一键贯通）</h2>
+  <h2 id="ch12-pipeline">12.2 毕业项目 Kaggle 全套自包含流水线脚本（一键贯通）</h2>
   <p>为了让工程条理极度清晰，我们在 Colab 中按照<strong>「依赖安装 ➔ 数据防线与早停微调 ➔ 拔插踏板裁判评测 ➔ 导出魔搭」</strong>四步完整实现：</p>
 
   <div class="example">
@@ -6632,6 +6632,7 @@ ollama run parenting-production
   const MAX_A4_BODY_HEIGHT = 970; // A4 净版心可用像素高度 (1123px - 页眉28px - 页脚25px - 留白)
   let a4Pages = [];
   let currentPageIdx = 0;
+  let idToPage = {}; // 锚点 id → { idx, el } 精准翻页索引
   let isPagedMode = localStorage.getItem('course_book_paged_mode') !== 'false';
 
   const prevBtn = document.getElementById('prevPageBtn');
@@ -6678,23 +6679,118 @@ ollama run parenting-production
     return { page, body };
   }
 
+  // 登记一张新 A4 纸到全局页册
+  function registerPage(page, body, pageNum, title, chapterId) {
+    bookContainer.appendChild(page);
+    a4Pages.push({ element: page, body, pageNum, title, chapterId: chapterId || '' });
+  }
+
+  // =========================================================================
+  // 目录 (TOC) 多页流式装订：目录条目远超一张 A4，必须按模块块拆页，
+  // 否则 .a4-page 的 overflow:hidden 会把后半目录物理裁掉（目录不全）。
+  // =========================================================================
+  function paginateToc(tocSection, state) {
+    const src = tocSection.querySelector('.toc-full');
+    if (!src) return false;
+
+    const heading = src.querySelector(':scope > .toc-heading');
+    const modules = Array.from(src.querySelectorAll(':scope > .toc-module-list > .toc-module'));
+
+    // 每页一张目录卡片壳（保留 .toc-full 版式），内部按模块流式填充
+    const newTocShell = (withHeading) => {
+      const shell = document.createElement('nav');
+      shell.className = 'toc-full toc-paged';
+      shell.style.margin = '0';
+      if (withHeading && heading) shell.appendChild(heading.cloneNode(true));
+      const list = document.createElement('ol');
+      list.className = 'toc-module-list';
+      shell.appendChild(list);
+      return { shell, list };
+    };
+
+    let { page, body } = createA4PageDOM(state.num, '', '全书目录 · Contents');
+    let shell = newTocShell(true);
+    body.appendChild(shell.shell);
+    registerPage(page, body, state.num, '全书目录');
+    state.num++;
+
+    const overflow = (b) => b.scrollHeight > MAX_A4_BODY_HEIGHT;
+
+    const openContinuation = (modHeaderClone) => {
+      // 新开一页目录，并生成「模块标题（续）」骨架
+      const created = createA4PageDOM(state.num, '', '全书目录 · Contents');
+      page = created.page; body = created.body;
+      const s = newTocShell(false);
+      if (modHeaderClone) {
+        const li = document.createElement('li');
+        li.className = 'toc-module';
+        const hdr = modHeaderClone.cloneNode(true);
+        hdr.textContent += '（续）';
+        li.appendChild(hdr);
+        const cl = document.createElement('ol');
+        cl.className = 'toc-chapter-list';
+        li.appendChild(cl);
+        s.list.appendChild(li);
+        shell = { shell: s.shell, list: s.list, contList: cl };
+      } else {
+        shell = { shell: s.shell, list: s.list, contList: null };
+      }
+      body.appendChild(shell.shell);
+      registerPage(page, body, state.num, '全书目录');
+      state.num++;
+      return shell;
+    };
+
+    modules.forEach(mod => {
+      const modHeader = mod.querySelector(':scope > .toc-module-header');
+      const chapterLis = Array.from(mod.querySelectorAll(':scope > .toc-chapter-list > .toc-chapter'));
+
+      // 常规路径：整块模块放入当前页
+      const modClone = mod.cloneNode(true);
+      shell.list.appendChild(modClone);
+      if (!overflow(body)) return;
+
+      // 放不下：回滚，改为按章条目粒度拆分
+      shell.list.removeChild(modClone);
+      let cur = openContinuation(modHeader);
+      let contList = cur.contList;
+
+      chapterLis.forEach(chLi => {
+        contList.appendChild(chLi.cloneNode(true));
+        if (overflow(body)) {
+          contList.removeChild(contList.lastChild);
+          cur = openContinuation(modHeader);
+          contList = cur.contList;
+          contList.appendChild(chLi.cloneNode(true));
+        }
+      });
+    });
+
+    // 隐藏原始目录区（已拆入多张 A4）
+    tocSection.style.display = 'none';
+    return true;
+  }
+
   // 核心拆页排版主程序
   function reflowBookIntoA4() {
     const rawChapters = Array.from(document.querySelectorAll('.chapter'));
-    const covers = Array.from(document.querySelectorAll('.cover, .front-matter'));
 
     // 如果已经拆过，不再重复拆
     if (document.querySelectorAll('.a4-page').length > 0) return;
 
     let globalPageNum = 1;
+    const state = { get num() { return globalPageNum; }, set num(v) { globalPageNum = v; } };
     a4Pages = [];
 
-    // 1. 封面与扉页作为专属 A4 首页
-    covers.forEach(c => {
+    // 1. 封面/扉页/目录：扉页单页专属；目录走多页流式装订
+    const fronts = Array.from(document.querySelectorAll('.cover, .front-matter'));
+    fronts.forEach(c => {
+      if (paginateToc(c, state)) return; // 目录已单独装订
+
       const a4 = document.createElement('div');
       a4.className = `a4-page ${globalPageNum % 2 === 0 ? 'even-page' : 'odd-page'} front-a4-page`;
       a4.dataset.pageNum = globalPageNum;
-      
+
       // 封面/扉页内嵌原始内容
       const cloned = c.cloneNode(true);
       cloned.style.display = 'block';
@@ -6728,13 +6824,7 @@ ollama run parenting-production
 
       // 初始化本章第一张 A4 纸
       let currentA4 = createA4PageDOM(globalPageNum, moduleName, chapterTitle);
-      bookContainer.appendChild(currentA4.page);
-      a4Pages.push({
-        element: currentA4.page,
-        pageNum: globalPageNum,
-        title: chapterTitle,
-        chapterId: chapId
-      });
+      registerPage(currentA4.page, currentA4.body, globalPageNum, chapterTitle, chapId);
       globalPageNum++;
 
       // 逐个元素流式排版
@@ -6752,14 +6842,7 @@ ollama run parenting-production
 
           // 开启新一张 A4 纸！
           currentA4 = createA4PageDOM(globalPageNum, moduleName, chapterTitle);
-          bookContainer.appendChild(currentA4.page);
-          a4Pages.push({
-            element: currentA4.page,
-            pageNum: globalPageNum,
-            title: chapterTitle,
-            chapterId: chapId,
-            targetId: child.id || ''
-          });
+          registerPage(currentA4.page, currentA4.body, globalPageNum, chapterTitle, chapId);
           globalPageNum++;
 
           // 将该元素作为新页面的首个元素放入
@@ -6769,6 +6852,35 @@ ollama run parenting-production
 
       // 隐藏未拆排的原始长章节
       chap.classList.add('chapter-raw-source');
+    });
+
+    buildIdIndex();
+    fillTocPageNumbers();
+  }
+
+  // =========================================================================
+  // 锚点 id → 页码索引：扫描每张 A4 纸版心内带 id 的元素 + 章节首页登记
+  // =========================================================================
+  function buildIdIndex() {
+    idToPage = {};
+    a4Pages.forEach((p, idx) => {
+      if (p.chapterId && !(p.chapterId in idToPage)) {
+        idToPage[p.chapterId] = { idx, el: p.element };
+      }
+      const root = p.body || p.element;
+      root.querySelectorAll('[id]').forEach(el => {
+        if (!(el.id in idToPage)) idToPage[el.id] = { idx, el };
+      });
+    });
+  }
+
+  // 目录点导线末端的实体页码（.toc-page 原本一直是空的）
+  function fillTocPageNumbers() {
+    document.querySelectorAll('.toc-full a[href^="#"]').forEach(a => {
+      const targetId = a.getAttribute('href').slice(1);
+      const hit = idToPage[targetId];
+      const pageSpan = a.querySelector('.toc-page');
+      if (hit && pageSpan) pageSpan.textContent = String(a4Pages[hit.idx].pageNum);
     });
   }
 
@@ -6838,24 +6950,42 @@ ollama run parenting-production
     }
   });
 
-  // 5. 目录与侧边栏锚点拦截：点击任意链接精准定位到具体的 A4 纸！
-  document.querySelectorAll('a[href^="#"]').forEach(a => {
-    a.addEventListener('click', (e) => {
-      const targetId = a.getAttribute('href').substring(1);
-      if (!targetId) return;
+  // 5. 目录与侧边栏锚点拦截：点击任意链接精准定位到具体的 A4 纸与小节！
+  //    （原始章节源容器是 display:none 的，浏览器默认锚点跳转会指向隐身原件而纹丝不动）
+  function jumpToAnchor(targetId) {
+    const hit = idToPage[targetId];
+    if (!hit) return false;
+    if (isPagedMode) {
+      goToPage(hit.idx);
+      hit.el.scrollIntoView({ block: 'start' });
+    } else {
+      hit.el.scrollIntoView({ block: 'start' });
+    }
+    return true;
+  }
 
-      const pIdx = a4Pages.findIndex(p => p.chapterId === targetId || p.targetId === targetId);
-      if (pIdx !== -1) {
-        if (isPagedMode) {
-          e.preventDefault();
-          goToPage(pIdx);
-        }
-      }
-    });
+  // 事件委托：目录/侧边栏克隆副本不会携带 addEventListener，必须挂在整个文档上
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href^="#"]');
+    if (!a) return;
+    const targetId = a.getAttribute('href').substring(1);
+    if (!targetId) return;
+    if (jumpToAnchor(targetId)) e.preventDefault();
   });
+
+  // 初始 hash 直达（例如 book.html#ch3-gpu-basics）—— 需在拆页索引建立后执行
+  function applyInitialHash() {
+    if (location.hash.length > 1) {
+      const targetId = decodeURIComponent(location.hash.slice(1));
+      if (idToPage[targetId]) {
+        currentPageIdx = idToPage[targetId].idx;
+      }
+    }
+  }
 
   // 执行 A4 流式拆页并渲染
   reflowBookIntoA4();
+  applyInitialHash();
   updateView();
 })();
 

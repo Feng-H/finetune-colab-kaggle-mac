@@ -251,7 +251,7 @@ print(x.grad)   # ？？（先手算，再运行验证）</pre>
   </dl>
 
   <section class="qa-log">
-    <h2>读者问答辑录（学习史存档）</h2>
+    <h2 id="ch1-qa">读者问答辑录（学习史存档）</h2>
     <p>以下是 2026-09-25 学习过程中的真实问答，正文已吸收其养分，此处留档：</p>
     <dl>
       <dt>Unsloth 是什么？是 LoRA 的底层框架吗？</dt><dd>都不是——专有名词：unsloth.ai 的微调加速库。分层：LoRA=数学方法，Hugging Face PEFT=官方实现，Unsloth=压在实现之下的加速引擎（手写 Triton kernel，API 不变约 2 倍速）。查字典对不上的「英文词」先怀疑是品牌名。</dd>

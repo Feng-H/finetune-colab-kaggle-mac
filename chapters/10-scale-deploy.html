@@ -46,7 +46,7 @@
     <figcaption>图 9-0 · 现代大模型三大主流推理引擎（llama.cpp / vLLM / SGLang）的生态分工版图</figcaption>
   </figure>
 
-  <h2 id="ch9-merge">9.1 踏板焊死：LoRA Merge 的本质与实操</h2>
+  <h2 id="ch9-merge">10.1 踏板焊死：LoRA Merge 的本质与实操</h2>
   <p>在第 10 章和第 10 章中，我们反复强化过一个概念：<strong>LoRA 只是挂在底座上的外置效果器踏板</strong>。我们在训练时，底座权重 <i>W</i><sub>0</sub> 始终被冻结，我们只训练了低秩矩阵 <i>A</i> 和 <i>B</i>（也就是几十 MB 的 <code>adapter_model.safetensors</code>）。</p>
   <p>但在最终交付给用户或者部署到服务器时，如果依然保留“底座 + 外挂踏板”的形态，会带来严重的生产缺陷：</p>
   <ol>
@@ -86,7 +86,7 @@ model.save_pretrained_merged(
 print(f"合并完成！产物已存入: {merged_dir}")</pre>
   </div>
 
-  <h2 id="ch9-quantization">9.2 压缩的艺术：从 16bit 到 4bit GGUF 量化</h2>
+  <h2 id="ch9-quantization">10.2 压缩的艺术：从 16bit 到 4bit GGUF 量化</h2>
   <p>当执行完 Merge 之后，如果你查看导出的目录大小，一个 Qwen3-0.6B 的 16-bit 模型大约占用 <strong>1.2GB</strong> 的硬盘与内存；如果微调的是 7B/8B 模型，16-bit 权重将高达 <strong>15GB~16GB</strong>！</p>
   <p>回到我们在第 10 章学过的显存数学公式：</p>
   <p style="text-align: center; font-style: italic; color: #8a8272;">
@@ -150,7 +150,7 @@ print(f"合并完成！产物已存入: {merged_dir}")</pre>
     </table>
   </div>
 
-  <h2 id="ch9-ollama">9.3 边缘离线交付：Ollama + GGUF 一键上云上端</h2>
+  <h2 id="ch9-ollama">10.3 边缘离线交付：Ollama + GGUF 一键上云上端</h2>
   <p>如果你想把微调好的模型交给前端同事、测试人员、或者部署到客户没有昂贵 GPU 的普通办公电脑上，<strong>Ollama 是目前全球最受欢迎的终极交付工具</strong>。</p>
 
   <h3>为什么选择 Ollama？</h3>
@@ -278,7 +278,7 @@ ollama create my-qwen3 -f Modelfile
 # 2. 随时随地与你自己微调出的模型对话！
 ollama run my-qwen3</code></pre>
 
-  <h2 id="ch9-cloud-engines">9.4 云端高并发双雄：vLLM（企业航母）与 SGLang（智能体新贵）</h2>
+  <h2 id="ch9-cloud-engines">10.4 云端高并发双雄：vLLM（企业航母）与 SGLang（智能体新贵）</h2>
   <p>当模型走出开发者的个人电脑、迈向对外开放的商业级生产服务时，单兵工具 Ollama / llama.cpp 就不再适用了。在面对每秒几十上百个并发请求时，如果你写一个 FastAPI 接口直接调用 Hugging Face 的 <code>model.generate()</code>，服务在第 5 个人接入时就会当场 OOM 崩溃！</p>
   <p>要在云端 GPU 服务器上榨干算力、支撑高吞吐低延迟的商业 API，现代大模型工程界形成了两座巍峨的高峰：<strong>工业底盘事实标准 vLLM</strong>，以及<strong>专为复杂智能体而生的极速新贵 SGLang</strong>。它们与端侧的 <strong>llama.cpp</strong> 一同构成了现代大模型推理部署的「三足鼎立」格局。</p>
 
